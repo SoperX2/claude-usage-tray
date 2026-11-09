@@ -371,6 +371,10 @@ class Widget:
     TIP_FONT_PX = 12
     TIP_DELAY_MS = 400
     DRAG_THRESHOLD_PX = 3       # så att en darrig klickning inte flyttar widgeten
+    CLOSE_PX = 12               # ✕ i hörnet, som bara syns när musen är över widgeten
+    CLOSE_FONT_PX = 10
+    CLOSE_FG = "#9a9a9a"
+    CLOSE_FG_HOVER = "#ffffff"
     # Mörk platta på alla bakgrunder. Mätarnas halvgenomskinliga kanter blandas mot
     # den, medan -transparentcolor skulle ge en färgad kant på ljusa bakgrunder.
     BG = (32, 32, 32)
@@ -398,12 +402,25 @@ class Widget:
             label.bind("<Leave>", lambda _e: self._tip_cancel())
             self.labels[key] = label
 
+        self.close_shown = False
+        self.close_btn = tk.Label(
+            self.win, text="✕", bg=self.BG_HEX, fg=self.CLOSE_FG, bd=0, highlightthickness=0, cursor="hand2",
+        )
+        self.close_btn.bind("<Enter>", lambda _e: self.close_btn.configure(fg=self.CLOSE_FG_HOVER))
+        self.close_btn.bind("<Leave>", lambda _e: self.close_btn.configure(fg=self.CLOSE_FG))
+        # "break" stoppar Toplevel-bindningarna nedan, så att ✕ inte startar en dragning
+        for sequence in ("<ButtonPress-1>", "<Double-Button-1>", "<B1-Motion>"):
+            self.close_btn.bind(sequence, lambda _e: "break")
+        self.close_btn.bind("<ButtonRelease-1>", self._close_clicked)
+
         # Toplevel-bindningar gäller även etiketterna inuti
         self.win.bind("<ButtonPress-1>", self._press)
         self.win.bind("<Double-Button-1>", self._double_click)
         self.win.bind("<B1-Motion>", self._motion)
         self.win.bind("<ButtonRelease-1>", self._release)
         self.win.bind("<Button-3>", self._show_menu)
+        self.win.bind("<Enter>", lambda _e: self._sync_close_button())
+        self.win.bind("<Leave>", lambda _e: self._sync_close_button())
 
         self.tip = tk.Toplevel(self.win, bg=self.BG_HEX)
         self.tip.withdraw()
@@ -452,6 +469,34 @@ class Widget:
             self.labels[key].place(x=pad + i * (px + gap), y=pad, width=px, height=px)
         w, h = self._size(s)
         self.win.geometry(f"{w}x{h}+{self.x}+{self.y}")
+        self.close_btn.configure(font=("Segoe UI", -round(self.CLOSE_FONT_PX * s)))   # negativt = pixlar
+        if self.close_shown:
+            self._place_close_button()
+
+    def _place_close_button(self) -> None:
+        s = self.scale
+        size, inset = round(self.CLOSE_PX * s), round(s)
+        self.close_btn.place(x=self._size(s)[0] - size - inset, y=inset, width=size, height=size)
+        self.close_btn.lift()
+
+    def _sync_close_button(self) -> None:
+        """Visar ✕ om pekaren är över widgeten. Läser pekaren eftersom ett Leave också
+        kommer vid varje övergång mellan etiketterna inuti widgeten."""
+        cx, cy = cursor_pos()
+        w, h = self._size(self.scale)
+        over = (
+            self.win.state() == "normal"
+            and self.x <= cx < self.x + w
+            and self.y <= cy < self.y + h
+        )
+        if over == self.close_shown:
+            return
+        self.close_shown = over
+        if over:
+            self._place_close_button()
+        else:
+            self.close_btn.place_forget()
+            self.close_btn.configure(fg=self.CLOSE_FG)
 
     def _set_scale(self, scale: float) -> None:
         self.scale = scale
@@ -487,15 +532,25 @@ class Widget:
         style_as_tool_window(self.win)
         round_window_corners(self.win)
 
-    def toggle(self) -> None:
-        visible = self.win.state() == "normal"
+    def set_visible(self, visible: bool) -> None:
         if visible:
+            self.show()
+        else:
             self._tip_cancel()
             self.win.withdraw()
-        else:
-            self.show()
-        self.settings["visible"] = not visible
+        self._sync_close_button()
+        self.settings["visible"] = visible
         save_settings(self.settings)
+        self.app._update_tray_menus()   # "Visa widget" eller "Dölj widget"
+
+    def toggle(self) -> None:
+        self.set_visible(not self.settings["visible"])
+
+    def _close_clicked(self, event) -> str:
+        # Släpps knappen utanför ✕ ångrar man sig, som på en vanlig knapp
+        if 0 <= event.x < self.close_btn.winfo_width() and 0 <= event.y < self.close_btn.winfo_height():
+            self.set_visible(False)
+        return "break"
 
     # ---- dra & klicka ----
     def _press(self, _event=None) -> None:
@@ -533,6 +588,7 @@ class Widget:
         moved = self.dragging
         self.drag = None
         self.dragging = False
+        self._sync_close_button()
         if moved:
             self._sync_scale()
             self.settings["x"], self.settings["y"] = self.x, self.y
@@ -543,7 +599,7 @@ class Widget:
     def _show_menu(self, _event) -> None:
         self._tip_cancel()
         self.menu.delete(0, "end")
-        for entry in self.app._menu_entries():
+        for entry in self.app._menu_entries(for_widget=True):
             if entry is None:
                 self.menu.add_separator()
                 continue
@@ -552,7 +608,7 @@ class Widget:
                 self.menu.add_command(label=text() if callable(text) else text, state="disabled")
             else:
                 self.menu.add_command(label=text, command=action)
-        # "Lås position" före sista avdelaren, alltså direkt efter Visa/dölj
+        # "Lås position" före sista avdelaren, alltså direkt efter "Stäng widget"
         self.menu.insert_checkbutton(
             self.menu.index("end") - 1, label="Lås position", variable=self.locked, command=self._lock_changed,
         )
@@ -562,6 +618,7 @@ class Widget:
             self.menu.tk_popup(cx, cy)
         finally:
             self.menu.grab_release()
+            self._sync_close_button()   # musen kan ha lämnat widgeten medan menyn var öppen
 
     def _lock_changed(self) -> None:
         self.settings["locked"] = self.locked.get()
@@ -658,6 +715,7 @@ class App:
         self.root: tk.Tk | None = None
         self.widget: Widget | None = None
         self.ui_queue: queue.Queue = queue.Queue()    # uppgifter som ska köras i Tk-tråden
+        self.tray_menu_lock = threading.Lock()
         self.key_dialog_open = False
         self.data = {"session": None, "week": None}   # (pct, reset_dt)
         self.error: str | None = None
@@ -671,8 +729,12 @@ class App:
         self.wake_evt = threading.Event()
 
     # ---- meny (delas av båda ikonerna och widgeten) ----
-    def _menu_entries(self) -> list:
+    def _menu_entries(self, for_widget: bool = False) -> list:
         """Menyraderna i ordning: (text, åtgärd), None = avdelare. Utan åtgärd = bara text."""
+        widget_entry = (
+            ("Stäng widget", self._hide_widget) if for_widget
+            else (self._widget_menu_text, self._toggle_widget)
+        )
         return [
             (lambda: fmt_line("Session", self.data["session"]), None),
             (lambda: fmt_line("Vecka", self.data["week"]), None),
@@ -681,10 +743,13 @@ class App:
             ("Uppdatera nu", self._refresh_now),
             ("Öppna användning i webbläsaren", self._open_usage_page),
             ("Byt sessionKey…", self._change_key),
-            ("Visa/dölj widget", self._toggle_widget),
+            widget_entry,
             None,
-            ("Avsluta", self._quit),
+            ("Avsluta Claude Usage", self._quit),
         ]
+
+    def _widget_menu_text(self) -> str:
+        return "Dölj widget" if self.settings["visible"] else "Visa widget"
 
     def _build_menu(self) -> pystray.Menu:
         items = []
@@ -693,11 +758,18 @@ class App:
                 items.append(pystray.Menu.SEPARATOR)
                 continue
             text, action = entry
+            label = (lambda _, t=text: t()) if callable(text) else text
             if action is None:
-                items.append(pystray.MenuItem(lambda _, t=text: t(), None, enabled=False))
+                items.append(pystray.MenuItem(label, None, enabled=False))
             else:
-                items.append(pystray.MenuItem(text, action, default=action == self._refresh_now))
+                items.append(pystray.MenuItem(label, action, default=action == self._refresh_now))
         return pystray.Menu(*items)
+
+    def _update_tray_menus(self):
+        # Anropas från både poll- och Tk-tråden, och pystray river den gamla menyn först
+        with self.tray_menu_lock:
+            for icon in self.icons.values():
+                icon.update_menu()
 
     def _status_line(self) -> str:
         if self.error:
@@ -714,6 +786,9 @@ class App:
 
     def _toggle_widget(self):
         self.ui_queue.put(self.widget.toggle)
+
+    def _hide_widget(self):
+        self.ui_queue.put(lambda: self.widget.set_visible(False))
 
     def _change_key(self):
         # Egen tråd eftersom svaret väntas in. Från widgetens meny körs vi i Tk-tråden,
@@ -884,7 +959,7 @@ class App:
             win = self.data[key]
             icon.icon = make_gauge(win[0] if win else None, stale=stale, light=light)
             icon.title = self._tooltip_text(key)[:127]   # Windows max-längd på tooltip
-            icon.update_menu()
+        self._update_tray_menus()
         state = self._widget_state()
         self.ui_queue.put(lambda: self.widget.refresh(state))
 

@@ -30,9 +30,11 @@ A small borderless window with the same two gauges, always on top. It does not s
 
 - **Drag** with the left mouse button to move it, also between monitors. The gauges are redrawn at the right size on monitors with different scaling
 - **Double-click** to refresh
-- **Right-click** for the same menu as the tray icons, plus **Lock position**
+- **Right-click** for the same menu as the tray icons, plus **Lås position** ("Lock position")
 - **Hover** over a gauge for details
-- **Show/hide** it from the menu of the tray icons or the widget
+- **Close** it with the small ✕ that appears in the corner when you hover over the widget, or with **Stäng widget** ("Close widget") in its menu. The app keeps running in the tray
+- **Bring it back** with **Visa widget** ("Show widget") in the tray menu
+- **Avsluta Claude Usage** ("Quit Claude Usage") in either menu exits the whole app
 
 The widget has a dark background so it looks the same on light and dark wallpapers. Corners are rounded on Windows 11 and square on older versions.
 

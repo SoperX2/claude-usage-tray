@@ -29,6 +29,8 @@ Samma mätare visas också i en flytande widget (klassen `Widget`) som alltid li
   per GUID. Ändra inte GUID:erna, och kontrollera `_message` vid uppgradering av pystray
 - En GUID kan bara ägas av en process: en andra instans nekas ikonerna (`_tray_added` hindrar den från att
   ändra eller ta bort den första instansens), men visar ändå en egen widget
+- Widgetens ✕ visas vid hovring, även när positionen är låst. Trayns "Visa/Dölj widget" kräver
+  `_update_tray_menus`, eftersom pystray bara bygger om menyn när `update_menu` anropas
 - Huvudtråden kör Tk:s `mainloop`. All Tk-kod måste köras där: andra trådar lägger en funktion i
   `App.ui_queue`, och `App._pump` läser kön var 100:e ms med `root.after`
 - `_pump` bokar nästa körning före uppgifterna, eftersom sessionKey-dialogen kör en egen händelseloop
