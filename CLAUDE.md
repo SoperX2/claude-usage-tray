@@ -24,6 +24,11 @@ Samma mätare visas också i en flytande widget (klassen `Widget`) som alltid li
 ## Viktiga detaljer
 - pystray på Windows: varje `Icon` måste **skapas och köras i samma tråd** (fönstret skapas i konstruktorn,
   meddelandeloopen läser bara den trådens fönster). Därför en tråd per ikon i `App._icon_thread`.
+- `TrayIcon` ersätter pystrays privata `_message` för att sätta fast `uID` och GUID (`TRAY_IDS`), annars
+  blir `uID` alltid 0 (pystray skickar felstavat `hID`). Windows sparar valet i "Andra ikoner i systemfältet"
+  per GUID. Ändra inte GUID:erna, och kontrollera `_message` vid uppgradering av pystray
+- En GUID kan bara ägas av en process: en andra instans nekas ikonerna (`_tray_added` hindrar den från att
+  ändra eller ta bort den första instansens), men visar ändå en egen widget
 - Huvudtråden kör Tk:s `mainloop`. All Tk-kod måste köras där: andra trådar lägger en funktion i
   `App.ui_queue`, och `App._pump` läser kön var 100:e ms med `root.after`
 - `_pump` bokar nästa körning före uppgifterna, eftersom sessionKey-dialogen kör en egen händelseloop

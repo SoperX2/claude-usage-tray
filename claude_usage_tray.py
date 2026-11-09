@@ -22,6 +22,7 @@ import queue
 import signal
 import threading
 import tkinter as tk
+import uuid
 import webbrowser
 from ctypes import wintypes
 from datetime import datetime
@@ -32,6 +33,7 @@ import keyring
 import pystray
 from curl_cffi import requests
 from PIL import Image, ImageDraw, ImageFont, ImageTk
+from pystray._util import win32 as pystray_win32
 
 APP_NAME = "ClaudeUsageTray"
 BASE_URL = "https://claude.ai/api"
@@ -40,6 +42,13 @@ POLL_SECONDS = 120          # hur ofta vi hämtar ny data
 NOTIFY_THRESHOLDS = (80, 95)  # notis när sessionen passerar dessa %
 PUMP_MS = 100               # hur ofta Tk läser kön från de andra trådarna
 SETTINGS_PATH = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME / "settings.json"
+
+# Fasta id:n som Windows kommer ihåg ikonerna med. Ändras de nollställs användarens val
+# i "Andra ikoner i systemfältet".
+TRAY_IDS = {
+    "session": (1, "85133889-541a-4664-953f-9c5a3655af65"),
+    "week": (2, "223945e3-9509-47be-9fa2-ca07a8d589c5"),
+}
 
 WEEKDAYS_SV = ["mån", "tis", "ons", "tors", "fre", "lör", "sön"]
 
@@ -601,6 +610,43 @@ class Widget:
 
 
 # --------------------------------------------------------------------------- #
+#  Tray-ikon med fast identitet i Windows
+# --------------------------------------------------------------------------- #
+class TrayIcon(pystray.Icon):
+    """Ger ikonen ett fast uID och en fast GUID, så att Windows minns om den ska synas.
+
+    pystray 0.19.5 skickar hID=id(self), men fältet heter uID. Det blir alltså alltid 0,
+    och båda ikonerna delar samma post i Windows inställningar. Med NIF_GUID får varje
+    ikon en egen post, och den gäller oavsett om appen körs med python eller pythonw.
+    """
+
+    def __init__(self, *args, tray_uid: int, tray_guid: str, **kwargs):
+        guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
+        self._tray_uid = tray_uid
+        self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
+        self._tray_added = False
+        super().__init__(*args, **kwargs)
+
+    def _message(self, code, flags, **kwargs):
+        # Ersätter pystrays privata metod med samma namn.
+        # En GUID identifierar ikonen oavsett process, så en andra instans som nekats
+        # ikonen får inte ändra eller ta bort den som den första instansen äger.
+        if code != pystray_win32.NIM_ADD and not self._tray_added:
+            return
+        ok = pystray_win32.Shell_NotifyIcon(code, pystray_win32.NOTIFYICONDATAW(
+            cbSize=ctypes.sizeof(pystray_win32.NOTIFYICONDATAW),
+            hWnd=self._hwnd,
+            uID=self._tray_uid,
+            uFlags=flags | pystray_win32.NIF_GUID,
+            guidItem=self._tray_guid,
+            **kwargs))
+        if code == pystray_win32.NIM_ADD:
+            self._tray_added = bool(ok)
+            if not ok:
+                log(f"FEL: Windows vägrade lägga till ikonen {self.name} (körs appen redan?)")
+
+
+# --------------------------------------------------------------------------- #
 #  Appen – två ikoner (session + vecka) och widgeten
 # --------------------------------------------------------------------------- #
 class App:
@@ -742,11 +788,14 @@ class App:
             icon.visible = True
             self.ready[key].set()
 
-        icon = pystray.Icon(
+        tray_uid, tray_guid = TRAY_IDS[key]
+        icon = TrayIcon(
             f"{APP_NAME}_{key}",
             make_gauge(None, light=taskbar_is_light()),
             self._tooltip_text(key)[:127],
             menu=self._build_menu(),
+            tray_uid=tray_uid,
+            tray_guid=tray_guid,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
