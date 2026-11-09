@@ -1,0 +1,4 @@
+pystray>=0.19
+Pillow>=10.1
+curl_cffi>=0.7
+keyring>=24

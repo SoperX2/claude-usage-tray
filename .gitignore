@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Lokala inställningar och loggar
+settings.json
+*.log
+
+# Editorer
+.vscode/
+.idea/
