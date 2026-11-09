@@ -5,7 +5,11 @@
 
 A small Windows app that shows how much of your Claude usage limits you have used, as two gauges in the system tray and in an optional floating widget.
 
-![Screenshot](docs/screenshot.png)
+![The floating widget with its tooltip](docs/screenshot.png)
+
+| Tray icons | Widget on the desktop |
+|---|---|
+| ![The two gauges in the system tray](docs/tray-icons.png) | ![The floating widget in the corner of the screen](docs/widget-desktop.png) |
 
 ## Features
 
