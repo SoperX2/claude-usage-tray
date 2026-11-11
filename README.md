@@ -23,7 +23,7 @@ No Python needed. **[Download the latest release](https://github.com/SoperX2/cla
 
 The two gauges show up in the system tray, and the widget in the bottom-right corner of the screen. Windows 11 puts new tray icons in the hidden `^` overflow menu: drag them out to the taskbar once and they will stay there.
 
-If you move the exe to another folder later, Windows treats it as a new app: drag the tray icons out again, and turn **Start with Windows** off and on again.
+If you move the exe to another folder later, Windows treats it as a new app: drag the tray icons out again. If you use **Start with Windows**, its check mark is now empty: choose it once to make Windows start the exe from the new folder.
 
 ### "Windows protected your PC"
 

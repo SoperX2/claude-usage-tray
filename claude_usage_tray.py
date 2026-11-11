@@ -56,13 +56,19 @@ TRAY_IDS = {
 }
 
 
+def executable_path() -> str:
+    """Exe-filens fullständiga sökväg. realpath ger samma sökväg oavsett om filen nåtts via
+    kort 8.3-namn, junction eller symbolisk länk."""
+    return os.path.realpath(sys.executable)
+
+
 def tray_guid(key: str) -> str:
     """GUID för ikonen. Windows knyter en GUID till utgivaren om programmet är signerat
     (python.exe och pythonw.exe), annars till sökvägen. En osignerad exe som flyttats skulle
     då nekas ikonerna, så exe-filen får en egen GUID per sökväg."""
     base = TRAY_IDS[key][1]
     if getattr(sys, "frozen", False):
-        return str(uuid.uuid5(uuid.UUID(base), os.path.normcase(sys.executable)))
+        return str(uuid.uuid5(uuid.UUID(base), os.path.normcase(executable_path())))
     return base
 
 
@@ -82,7 +88,34 @@ def set_session_key(key: str) -> None:
     keyring.set_password(APP_NAME, "sessionKey", key)
 
 
-class SessionKeyDialog(simpledialog.Dialog):
+class AppDialog(simpledialog.Dialog):
+    """Bas för appens dialoger, som bara får visas en åt gången. De är modala och tar grab, och en
+    andra dialog som öppnas i den förstas händelseloop skulle ta grab från den."""
+
+    current: "AppDialog | None" = None
+
+    def __init__(self, parent, title: str):
+        # Visar dialogen och väntar tills den stängs. Anropas bara från Tk-tråden.
+        AppDialog.current = self
+        try:
+            super().__init__(parent, title=title)
+        finally:
+            AppDialog.current = None
+
+    @staticmethod
+    def raise_open() -> bool:
+        """Lägger en redan öppen dialog överst. Sant om det fanns en, och då ska ingen ny visas."""
+        if AppDialog.current is None:
+            return False
+        try:
+            AppDialog.current.lift()
+            AppDialog.current.focus_force()
+        except tk.TclError:         # håller på att stängas
+            pass
+        return True
+
+
+class SessionKeyDialog(AppDialog):
     """Frågar efter sessionKey. Skapas alltid i Tk-tråden, se App._ask_session_key."""
 
     def body(self, master):
@@ -105,7 +138,7 @@ class SessionKeyDialog(simpledialog.Dialog):
         self.result = self.entry.get().strip() or None
 
 
-class AboutDialog(simpledialog.Dialog):
+class AboutDialog(AppDialog):
     """Version och länk till GitHub. Skapas alltid i Tk-tråden, se App._show_about."""
 
     def body(self, master):
@@ -166,8 +199,8 @@ AUTOSTART_VALUE = APP_NAME
 def autostart_command() -> str:
     """Kommandot som startar just den här exe-filen eller det här skriptet."""
     if getattr(sys, "frozen", False):   # PyInstaller-exe
-        return f'"{sys.executable}"'
-    exe = Path(sys.executable)
+        return f'"{executable_path()}"'
+    exe = Path(executable_path())
     pythonw = exe.with_name("pythonw.exe")
     if exe.name.lower() == "python.exe" and pythonw.exists():
         exe = pythonw                   # inget konsolfönster vid inloggning
@@ -342,6 +375,7 @@ TEXTS = {
         "err_auth": "sessionKey invalid or expired ({detail})",
         "err_fetch": "Could not fetch: {detail}",
         "notify": "You have used {pct}% of the session. Resets {when}.",
+        "err_autostart": "Could not change Start with Windows: {detail}",
     },
     "sv": {
         "session": "Session",
@@ -375,6 +409,7 @@ TEXTS = {
         "err_auth": "sessionKey ogiltig/utgången ({detail})",
         "err_fetch": "Kunde inte hämta: {detail}",
         "notify": "Du har använt {pct}% av sessionen. Nollställs {when}.",
+        "err_autostart": "Kunde inte ändra Starta med Windows: {detail}",
     },
 }
 
@@ -387,11 +422,7 @@ def detect_language() -> str:
     forced = os.environ.get(LANG_ENV, "").strip().lower()
     if forced in TEXTS:
         return forced
-    try:
-        lang_id = kernel32.GetUserDefaultUILanguage()
-    except OSError:
-        return "en"
-    return "sv" if lang_id & 0x3FF == LANG_SWEDISH else "en"
+    return "sv" if kernel32.GetUserDefaultUILanguage() & 0x3FF == LANG_SWEDISH else "en"
 
 
 LANG = detect_language()
@@ -476,14 +507,7 @@ def fmt_line(label: str, window) -> str:
 # --------------------------------------------------------------------------- #
 def taskbar_is_light() -> bool:
     """Läser Windows-temat så att ikonen syns på både mörkt och ljust aktivitetsfält."""
-    try:
-        k = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        )
-        return winreg.QueryValueEx(k, "SystemUsesLightTheme")[0] == 1
-    except Exception:
-        return False
+    return _read_value(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "SystemUsesLightTheme") == 1
 
 
 def make_gauge(pct: float | None, stale: bool = False, light: bool = False, size: int = 64) -> Image.Image:
@@ -627,7 +651,6 @@ class Widget:
         self.tip_label = tk.Label(self.tip, bg=self.BG_HEX, fg="#f0f0f0", justify="left")
         self.tip_label.pack()
 
-        self.locked = tk.BooleanVar(self.win, value=bool(self.settings["locked"]))
         self.menu = tk.Menu(self.win, tearoff=0)
         self.menu_vars: list[tk.BooleanVar] = []
 
@@ -740,7 +763,6 @@ class Widget:
         self._sync_close_button()
         self.settings["visible"] = visible
         save_settings(self.settings)
-        self.app._update_tray_menus()   # "Visa widget" eller "Dölj widget"
 
     def toggle(self) -> None:
         self.set_visible(not self.settings["visible"])
@@ -763,7 +785,7 @@ class Widget:
         self.app._refresh_now()
 
     def _motion(self, _event) -> None:
-        if self.drag is None or self.locked.get():
+        if self.drag is None or self.settings["locked"]:
             return
         ox, oy, sx, sy = self.drag
         cx, cy = cursor_pos()
@@ -812,8 +834,6 @@ class Widget:
                 self.menu.add_checkbutton(label=text, variable=var, command=action)
             else:
                 self.menu.add_command(label=text, command=action)
-            if action == self.app._hide_widget:     # "Lås position" direkt efter "Stäng widget"
-                self.menu.add_checkbutton(label=t("menu_lock"), variable=self.locked, command=self._lock_changed)
         self.win.focus_force()  # annars stängs inte menyn av ett klick utanför
         cx, cy = cursor_pos()
         try:
@@ -822,8 +842,8 @@ class Widget:
             self.menu.grab_release()
             self._sync_close_button()   # musen kan ha lämnat widgeten medan menyn var öppen
 
-    def _lock_changed(self) -> None:
-        self.settings["locked"] = self.locked.get()
+    def toggle_lock(self) -> None:
+        self.settings["locked"] = not self.settings["locked"]
         save_settings(self.settings)
 
     # ---- tooltip ----
@@ -879,22 +899,20 @@ class TrayIcon(pystray.Icon):
     ikon en egen post, och den gäller oavsett om appen körs med python eller pythonw.
     """
 
-    def __init__(self, *args, tray_uid: int, tray_guid: str, menu_lock: threading.Lock, **kwargs):
+    def __init__(self, *args, tray_uid: int, tray_guid: str, **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
         self._tray_added = False
-        self._menu_lock = menu_lock
         super().__init__(*args, **kwargs)
 
     def _on_notify(self, wparam, lparam):
         # Ersätter pystrays privata metod med samma namn. pystray bygger menyn i förväg, så den
-        # byggs om här precis innan den visas. Då läses bland annat bocken för "Starta med
-        # Windows" från registret när menyn öppnas. Låset släpps innan menyn visas, eftersom
-        # menyvalen själva kan behöva det.
+        # byggs om här precis innan den visas, med aktuella procent, status och bock för
+        # "Starta med Windows" (läst från registret). Menyn byggs bara om i ikonens egen tråd,
+        # aldrig från andra trådar, som annars kunde förstöra den medan den visas.
         if lparam == pystray_win32.WM_RBUTTONUP:
-            with self._menu_lock:
-                self.update_menu()
+            self.update_menu()
         super()._on_notify(wparam, lparam)
 
     def _message(self, code, flags, **kwargs):
@@ -928,9 +946,6 @@ class App:
         self.root: tk.Tk | None = None
         self.widget: Widget | None = None
         self.ui_queue: queue.Queue = queue.Queue()    # uppgifter som ska köras i Tk-tråden
-        self.tray_menu_lock = threading.Lock()
-        self.key_dialog_open = False
-        self.about_open = False
         self.data = {"session": None, "week": None}   # (pct, reset_dt)
         self.error: str | None = None
         self.updated: datetime | None = None
@@ -946,10 +961,12 @@ class App:
     def _menu_entries(self, for_widget: bool = False) -> list:
         """Menyraderna i ordning: (text, åtgärd) eller (text, åtgärd, bockad?), None = avdelare.
         Utan åtgärd = bara text. Text och bock kan vara funktioner, som läses när menyn byggs."""
-        widget_entry = (
-            (t("menu_close_widget"), self._hide_widget) if for_widget
-            else (self._widget_menu_text, self._toggle_widget)
-        )
+        widget_entries = [
+            (t("menu_close_widget"), self._hide_widget),
+            (t("menu_lock"), self._toggle_lock, lambda: bool(self.settings["locked"])),
+        ] if for_widget else [
+            (self._widget_menu_text, self._toggle_widget),
+        ]
         return [
             (lambda: fmt_line(self.LABELS["session"], self.data["session"]), None),
             (lambda: fmt_line(self.LABELS["week"], self.data["week"]), None),
@@ -958,7 +975,7 @@ class App:
             (t("menu_refresh"), self._refresh_now),
             (t("menu_open_usage"), self._open_usage_page),
             (t("menu_change_key"), self._change_key),
-            widget_entry,
+            *widget_entries,
             None,
             (t("menu_autostart"), self._toggle_autostart, autostart_enabled),
             (t("menu_about"), self._show_about),
@@ -985,12 +1002,6 @@ class App:
                 items.append(pystray.MenuItem(label, action, default=action == self._refresh_now))
         return pystray.Menu(*items)
 
-    def _update_tray_menus(self):
-        # Anropas från både poll- och Tk-tråden, och pystray river den gamla menyn först
-        with self.tray_menu_lock:
-            for icon in self.icons.values():
-                icon.update_menu()
-
     def _status_line(self) -> str:
         if self.error:
             return f"⚠ {self.error}"
@@ -1010,6 +1021,9 @@ class App:
     def _hide_widget(self):
         self.ui_queue.put(lambda: self.widget.set_visible(False))
 
+    def _toggle_lock(self):
+        self.ui_queue.put(self.widget.toggle_lock)
+
     def _toggle_autostart(self):
         # Utgår från registret, inte från bocken, som kan vara inaktuell
         enable = not autostart_enabled()
@@ -1017,20 +1031,16 @@ class App:
             set_autostart(enable)
             log(f"Starta med Windows: {'på' if enable else 'av'}")
         except OSError as e:
+            # Loggen syns inte i exe-filen eller med pythonw, så användaren får en notis
             log(f"FEL: kunde inte ändra Starta med Windows: {e!r}")
-        self._update_tray_menus()
+            self._notify(t("err_autostart", detail=e.strerror or type(e).__name__))
 
     def _show_about(self):
         self.ui_queue.put(self._about_dialog)
 
     def _about_dialog(self):
-        if self.about_open:
-            return
-        self.about_open = True
-        try:
+        if not AppDialog.raise_open():
             AboutDialog(self.root, title=t("menu_about"))
-        finally:
-            self.about_open = False
 
     def _change_key(self):
         # Egen tråd eftersom svaret väntas in. Från widgetens meny körs vi i Tk-tråden,
@@ -1055,13 +1065,9 @@ class App:
         return None
 
     def _session_key_dialog(self) -> str | None:
-        if self.key_dialog_open:
+        if AppDialog.raise_open():
             return None
-        self.key_dialog_open = True
-        try:
-            return SessionKeyDialog(self.root, title="Claude Usage").result
-        finally:
-            self.key_dialog_open = False
+        return SessionKeyDialog(self.root, title="Claude Usage").result
 
     def _quit(self):
         # Säkert från alla trådar och från Ctrl+C. Själva stängningen sker i _pump.
@@ -1112,7 +1118,6 @@ class App:
             menu=self._build_menu(),
             tray_uid=TRAY_IDS[key][0],
             tray_guid=tray_guid(key),
-            menu_lock=self.tray_menu_lock,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
@@ -1151,20 +1156,26 @@ class App:
             log(f"FEL: {e!r}")
         self._render()
 
+    def _notify(self, message: str) -> None:
+        """Windows-notis från sessionsikonen. Säkert från alla trådar."""
+        icon = self.icons.get("session")
+        if icon is None:
+            return
+        try:
+            icon.notify(message, "Claude Usage")
+        except Exception as e:
+            log(f"FEL: kunde inte visa notisen: {e!r}")
+
     def _maybe_notify(self):
         win = self.data["session"]
-        icon = self.icons.get("session")
-        if not win or icon is None or not hasattr(icon, "notify"):
+        if not win:
             return
         pct, reset = win
         for threshold in NOTIFY_THRESHOLDS:
             tag = (threshold, reset)
             if pct >= threshold and tag not in self.notified:
                 self.notified.add(tag)
-                try:
-                    icon.notify(t("notify", pct=round(pct), when=fmt_reset(reset)), "Claude Usage")
-                except Exception:
-                    pass
+                self._notify(t("notify", pct=round(pct), when=fmt_reset(reset)))
 
     def _tooltip_text(self, key: str) -> str:
         lines = [t("tip_title", label=self.LABELS[key].lower())]
@@ -1197,7 +1208,7 @@ class App:
             win = self.data[key]
             icon.icon = make_gauge(win[0] if win else None, stale=stale, light=light)
             icon.title = self._tooltip_text(key)[:127]   # Windows max-längd på tooltip
-        self._update_tray_menus()
+        # Menyn byggs inte om här: TrayIcon._on_notify bygger den när den öppnas
         state = self._widget_state()
         self.ui_queue.put(lambda: self.widget.refresh(state))
 
