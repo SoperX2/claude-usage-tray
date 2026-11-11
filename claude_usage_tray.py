@@ -20,10 +20,12 @@ import math
 import os
 import queue
 import signal
+import sys
 import threading
 import tkinter as tk
 import uuid
 import webbrowser
+import winreg
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -142,6 +144,64 @@ def save_settings(settings: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Starta med Windows – ett värde under HKCU\...\Run. Registret är enda källan,
+#  så bocken i menyn stämmer även om användaren ändrat i Aktivitetshanteraren.
+# --------------------------------------------------------------------------- #
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# Aktivitetshanteraren sparar "Inaktiverad" här, som binärdata med udda första byte
+STARTUP_APPROVED_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+AUTOSTART_VALUE = APP_NAME
+
+
+def autostart_command() -> str:
+    """Kommandot som startar just den här exe-filen eller det här skriptet."""
+    if getattr(sys, "frozen", False):   # PyInstaller-exe
+        return f'"{sys.executable}"'
+    exe = Path(sys.executable)
+    pythonw = exe.with_name("pythonw.exe")
+    if exe.name.lower() == "python.exe" and pythonw.exists():
+        exe = pythonw                   # inget konsolfönster vid inloggning
+    return f'"{exe}" "{Path(__file__).resolve()}"'
+
+
+def _read_value(key_path: str, name: str):
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+
+
+def _delete_value(key_path: str, name: str) -> None:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except FileNotFoundError:
+        pass
+
+
+def autostart_enabled() -> bool:
+    """Bara sant om värdet startar den här kopian och inte är inaktiverat i Aktivitetshanteraren."""
+    command = _read_value(RUN_KEY, AUTOSTART_VALUE)
+    if not isinstance(command, str):
+        return False
+    if os.path.normcase(command.strip()) != os.path.normcase(autostart_command()):
+        return False            # pekar på en flyttad eller annan kopia
+    approved = _read_value(STARTUP_APPROVED_KEY, AUTOSTART_VALUE)
+    return not (isinstance(approved, bytes) and approved[:1] and approved[0] & 1)
+
+
+def set_autostart(enabled: bool) -> None:
+    if enabled:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, AUTOSTART_VALUE, 0, winreg.REG_SZ, autostart_command())
+    else:
+        _delete_value(RUN_KEY, AUTOSTART_VALUE)
+    # Tar bort en gammal "Inaktiverad" från Aktivitetshanteraren. Utan värde räknas posten som aktiverad.
+    _delete_value(STARTUP_APPROVED_KEY, AUTOSTART_VALUE)
+
+
+# --------------------------------------------------------------------------- #
 #  Win32 – skärmar, DPI och fönsterstilar
 # --------------------------------------------------------------------------- #
 # Egna WinDLL-instanser så att argtypes inte krockar med pystrays ctypes.windll
@@ -257,6 +317,7 @@ TEXTS = {
         "menu_show_widget": "Show widget",
         "menu_hide_widget": "Hide widget",
         "menu_lock": "Lock position",
+        "menu_autostart": "Start with Windows",
         "menu_about": "About Claude Usage",
         "menu_quit": "Quit Claude Usage",
         "about_version": "Version {version}",
@@ -289,6 +350,7 @@ TEXTS = {
         "menu_show_widget": "Visa widget",
         "menu_hide_widget": "Dölj widget",
         "menu_lock": "Lås position",
+        "menu_autostart": "Starta med Windows",
         "menu_about": "Om Claude Usage",
         "menu_quit": "Avsluta Claude Usage",
         "about_version": "Version {version}",
@@ -405,7 +467,6 @@ def fmt_line(label: str, window) -> str:
 def taskbar_is_light() -> bool:
     """Läser Windows-temat så att ikonen syns på både mörkt och ljust aktivitetsfält."""
     try:
-        import winreg
         k = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
@@ -545,6 +606,7 @@ class Widget:
 
         self.locked = tk.BooleanVar(self.win, value=bool(self.settings["locked"]))
         self.menu = tk.Menu(self.win, tearoff=0)
+        self.menu_vars: list[tk.BooleanVar] = []
 
         self.x, self.y = self._initial_position()
         self.scale = self._scale_here()
@@ -713,13 +775,18 @@ class Widget:
     def _show_menu(self, _event) -> None:
         self._tip_cancel()
         self.menu.delete(0, "end")
+        self.menu_vars = []
         for entry in self.app._menu_entries(for_widget=True):
             if entry is None:
                 self.menu.add_separator()
                 continue
-            text, action = entry
+            text, action, *checked = entry
             if action is None:
                 self.menu.add_command(label=text() if callable(text) else text, state="disabled")
+            elif checked:
+                var = tk.BooleanVar(self.win, value=checked[0]())
+                self.menu_vars.append(var)      # Tk kräver att variabeln lever kvar
+                self.menu.add_checkbutton(label=text, variable=var, command=action)
             else:
                 self.menu.add_command(label=text, command=action)
             if action == self.app._hide_widget:     # "Lås position" direkt efter "Stäng widget"
@@ -789,12 +856,23 @@ class TrayIcon(pystray.Icon):
     ikon en egen post, och den gäller oavsett om appen körs med python eller pythonw.
     """
 
-    def __init__(self, *args, tray_uid: int, tray_guid: str, **kwargs):
+    def __init__(self, *args, tray_uid: int, tray_guid: str, menu_lock: threading.Lock, **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
         self._tray_added = False
+        self._menu_lock = menu_lock
         super().__init__(*args, **kwargs)
+
+    def _on_notify(self, wparam, lparam):
+        # Ersätter pystrays privata metod med samma namn. pystray bygger menyn i förväg, så den
+        # byggs om här precis innan den visas. Då läses bland annat bocken för "Starta med
+        # Windows" från registret när menyn öppnas. Låset släpps innan menyn visas, eftersom
+        # menyvalen själva kan behöva det.
+        if lparam == pystray_win32.WM_RBUTTONUP:
+            with self._menu_lock:
+                self.update_menu()
+        super()._on_notify(wparam, lparam)
 
     def _message(self, code, flags, **kwargs):
         # Ersätter pystrays privata metod med samma namn.
@@ -843,7 +921,8 @@ class App:
 
     # ---- meny (delas av båda ikonerna och widgeten) ----
     def _menu_entries(self, for_widget: bool = False) -> list:
-        """Menyraderna i ordning: (text, åtgärd), None = avdelare. Utan åtgärd = bara text."""
+        """Menyraderna i ordning: (text, åtgärd) eller (text, åtgärd, bockad?), None = avdelare.
+        Utan åtgärd = bara text. Text och bock kan vara funktioner, som läses när menyn byggs."""
         widget_entry = (
             (t("menu_close_widget"), self._hide_widget) if for_widget
             else (self._widget_menu_text, self._toggle_widget)
@@ -858,6 +937,7 @@ class App:
             (t("menu_change_key"), self._change_key),
             widget_entry,
             None,
+            (t("menu_autostart"), self._toggle_autostart, autostart_enabled),
             (t("menu_about"), self._show_about),
             None,
             (t("menu_quit"), self._quit),
@@ -872,10 +952,12 @@ class App:
             if entry is None:
                 items.append(pystray.Menu.SEPARATOR)
                 continue
-            text, action = entry
+            text, action, *checked = entry
             label = (lambda _, fn=text: fn()) if callable(text) else text
             if action is None:
                 items.append(pystray.MenuItem(label, None, enabled=False))
+            elif checked:
+                items.append(pystray.MenuItem(label, action, checked=lambda _, fn=checked[0]: fn()))
             else:
                 items.append(pystray.MenuItem(label, action, default=action == self._refresh_now))
         return pystray.Menu(*items)
@@ -904,6 +986,16 @@ class App:
 
     def _hide_widget(self):
         self.ui_queue.put(lambda: self.widget.set_visible(False))
+
+    def _toggle_autostart(self):
+        # Utgår från registret, inte från bocken, som kan vara inaktuell
+        enable = not autostart_enabled()
+        try:
+            set_autostart(enable)
+            log(f"Starta med Windows: {'på' if enable else 'av'}")
+        except OSError as e:
+            log(f"FEL: kunde inte ändra Starta med Windows: {e!r}")
+        self._update_tray_menus()
 
     def _show_about(self):
         self.ui_queue.put(self._about_dialog)
@@ -998,6 +1090,7 @@ class App:
             menu=self._build_menu(),
             tray_uid=tray_uid,
             tray_guid=tray_guid,
+            menu_lock=self.tray_menu_lock,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
