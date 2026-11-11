@@ -56,6 +56,16 @@ TRAY_IDS = {
 }
 
 
+def tray_guid(key: str) -> str:
+    """GUID för ikonen. Windows knyter en GUID till utgivaren om programmet är signerat
+    (python.exe och pythonw.exe), annars till sökvägen. En osignerad exe som flyttats skulle
+    då nekas ikonerna, så exe-filen får en egen GUID per sökväg."""
+    base = TRAY_IDS[key][1]
+    if getattr(sys, "frozen", False):
+        return str(uuid.uuid5(uuid.UUID(base), os.path.normcase(sys.executable)))
+    return base
+
+
 def log(msg: str) -> None:
     """Skriver till konsolen när appen körs med python (gör inget med pythonw)."""
     print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
@@ -1095,14 +1105,13 @@ class App:
             icon.visible = True
             self.ready[key].set()
 
-        tray_uid, tray_guid = TRAY_IDS[key]
         icon = TrayIcon(
             f"{APP_NAME}_{key}",
             make_gauge(None, light=taskbar_is_light()),
             self._tooltip_text(key)[:127],
             menu=self._build_menu(),
-            tray_uid=tray_uid,
-            tray_guid=tray_guid,
+            tray_uid=TRAY_IDS[key][0],
+            tray_guid=tray_guid(key),
             menu_lock=self.tray_menu_lock,
         )
         self.icons[key] = icon
