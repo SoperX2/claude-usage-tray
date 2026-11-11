@@ -35,7 +35,10 @@ from curl_cffi import requests
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from pystray._util import win32 as pystray_win32
 
+__version__ = "1.0.0"
+
 APP_NAME = "ClaudeUsageTray"
+REPO_URL = "https://github.com/SoperX2/claude-usage-tray"
 BASE_URL = "https://claude.ai/api"
 USAGE_PAGE = "https://claude.ai/settings/usage"
 POLL_SECONDS = 120          # hur ofta vi hämtar ny data
@@ -88,6 +91,28 @@ class SessionKeyDialog(simpledialog.Dialog):
 
     def apply(self):
         self.result = self.entry.get().strip() or None
+
+
+class AboutDialog(simpledialog.Dialog):
+    """Version och länk till GitHub. Skapas alltid i Tk-tråden, se App._show_about."""
+
+    def body(self, master):
+        self.attributes("-topmost", True)
+        self.resizable(False, False)
+        tk.Label(master, text="Claude Usage", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(master, text=t("about_version", version=__version__)).pack(anchor="w")
+        tk.Label(master, text=t("about_disclaimer"), justify="left").pack(anchor="w", pady=(8, 0))
+        return None
+
+    def buttonbox(self):
+        box = tk.Frame(self)
+        tk.Button(box, text=t("about_github"), command=lambda: webbrowser.open(REPO_URL)).pack(
+            side="left", padx=5, pady=5)
+        tk.Button(box, text=t("close"), width=10, command=self.cancel, default="active").pack(
+            side="left", padx=5, pady=5)
+        self.bind("<Return>", self.cancel)
+        self.bind("<Escape>", self.cancel)
+        box.pack()
 
 
 # --------------------------------------------------------------------------- #
@@ -232,7 +257,12 @@ TEXTS = {
         "menu_show_widget": "Show widget",
         "menu_hide_widget": "Hide widget",
         "menu_lock": "Lock position",
+        "menu_about": "About Claude Usage",
         "menu_quit": "Quit Claude Usage",
+        "about_version": "Version {version}",
+        "about_disclaimer": "Unofficial hobby project, not affiliated with Anthropic.",
+        "about_github": "Open on GitHub",
+        "close": "Close",
         "key_prompt": "Paste the value of the 'sessionKey' cookie from claude.ai\n"
                       "(F12 → Application → Cookies → https://claude.ai):",
         "ok": "OK",
@@ -259,7 +289,12 @@ TEXTS = {
         "menu_show_widget": "Visa widget",
         "menu_hide_widget": "Dölj widget",
         "menu_lock": "Lås position",
+        "menu_about": "Om Claude Usage",
         "menu_quit": "Avsluta Claude Usage",
+        "about_version": "Version {version}",
+        "about_disclaimer": "Inofficiellt hobbyprojekt, inte kopplat till Anthropic.",
+        "about_github": "Öppna på GitHub",
+        "close": "Stäng",
         "key_prompt": "Klistra in värdet på cookien 'sessionKey' från claude.ai\n"
                       "(F12 → Application → Cookies → https://claude.ai):",
         "ok": "OK",
@@ -687,10 +722,8 @@ class Widget:
                 self.menu.add_command(label=text() if callable(text) else text, state="disabled")
             else:
                 self.menu.add_command(label=text, command=action)
-        # "Lås position" före sista avdelaren, alltså direkt efter "Stäng widget"
-        self.menu.insert_checkbutton(
-            self.menu.index("end") - 1, label=t("menu_lock"), variable=self.locked, command=self._lock_changed,
-        )
+            if action == self.app._hide_widget:     # "Lås position" direkt efter "Stäng widget"
+                self.menu.add_checkbutton(label=t("menu_lock"), variable=self.locked, command=self._lock_changed)
         self.win.focus_force()  # annars stängs inte menyn av ett klick utanför
         cx, cy = cursor_pos()
         try:
@@ -796,6 +829,7 @@ class App:
         self.ui_queue: queue.Queue = queue.Queue()    # uppgifter som ska köras i Tk-tråden
         self.tray_menu_lock = threading.Lock()
         self.key_dialog_open = False
+        self.about_open = False
         self.data = {"session": None, "week": None}   # (pct, reset_dt)
         self.error: str | None = None
         self.updated: datetime | None = None
@@ -823,6 +857,8 @@ class App:
             (t("menu_open_usage"), self._open_usage_page),
             (t("menu_change_key"), self._change_key),
             widget_entry,
+            None,
+            (t("menu_about"), self._show_about),
             None,
             (t("menu_quit"), self._quit),
         ]
@@ -868,6 +904,18 @@ class App:
 
     def _hide_widget(self):
         self.ui_queue.put(lambda: self.widget.set_visible(False))
+
+    def _show_about(self):
+        self.ui_queue.put(self._about_dialog)
+
+    def _about_dialog(self):
+        if self.about_open:
+            return
+        self.about_open = True
+        try:
+            AboutDialog(self.root, title=t("menu_about"))
+        finally:
+            self.about_open = False
 
     def _change_key(self):
         # Egen tråd eftersom svaret väntas in. Från widgetens meny körs vi i Tk-tråden,
