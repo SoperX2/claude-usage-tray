@@ -534,6 +534,19 @@ def make_gauge(pct: float | None, stale: bool = False, light: bool = False, size
     return img.resize((size, size), Image.LANCZOS)
 
 
+def make_app_icon(size: int, pct: float = 65) -> Image.Image:
+    """Appens ikon (exe-filen och dialogerna): en vit mätare på widgetens mörka, rundade platta,
+    så att den syns på både ljusa och mörka bakgrunder. Se scripts/make_icon.py."""
+    SS = 4
+    plate = Image.new("RGBA", (size * SS, size * SS), (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (0, 0, size * SS - 1, size * SS - 1), radius=round(size * SS * 0.22), fill=Widget.BG + (255,),
+    )
+    img = plate.resize((size, size), Image.LANCZOS)
+    img.alpha_composite(make_gauge(pct, size=size))   # ritas i exakt storlek så att den blir skarp
+    return img
+
+
 # --------------------------------------------------------------------------- #
 #  Flytande widget – samma mätare, alltid överst. Rörs bara från Tk-tråden.
 # --------------------------------------------------------------------------- #
@@ -1187,6 +1200,9 @@ class App:
         self.root = tk.Tk()
         self.root.withdraw()    # osynlig, men äger dialogen och widgeten
         self.root.report_callback_exception = self._report_tk_error
+        # Appens ikon i dialogernas titelrad i stället för Tk:s fjäder. Referenserna måste leva kvar.
+        self.window_icons = [ImageTk.PhotoImage(make_app_icon(s), master=self.root) for s in (16, 32, 48)]
+        self.root.iconphoto(True, *self.window_icons)
         self.widget = Widget(self)
 
         threads = []
