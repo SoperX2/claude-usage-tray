@@ -1,21 +1,6 @@
 # Claude Usage Tray
 
-Windows tray-app i Python som visar Claude-användning som två mätar-ikoner (gauge, ingen text):
-vänster = session (5 h), höger = vecka. Tooltip visar % och nollställningstid, högerklick ger meny.
-Samma mätare visas också i en flytande widget (klassen `Widget`) som alltid ligger överst.
-
-## Köra
-- `pip install -r requirements.txt`
-- `python claude_usage_tray.py` (loggar till konsolen), `pythonw` för att köra utan konsol
-- Exe: `python -m PyInstaller --onefile --noconsole --name ClaudeUsage claude_usage_tray.py`
-
 ## Datakälla (inofficiellt, odokumenterat API)
-- Auth: cookien `sessionKey` från claude.ai, sparad i Windows Credential Manager via `keyring`
-  (service `ClaudeUsageTray`, user `sessionKey`)
-- `GET https://claude.ai/api/organizations` → välj org med `"chat"` i `capabilities` → `uuid`
-- `GET https://claude.ai/api/organizations/{uuid}/usage` → används just nu:
-  - `five_hour.utilization` (%), `five_hour.resets_at` (ISO, UTC)
-  - `seven_day.utilization`, `seven_day.resets_at`
 - Svaret innehåller även (oanvänt hittills): `limits[]` (kind/group/percent/severity/resets_at/is_active),
   `extra_usage`, `spend`, `seven_day_breakdown.rows[]` (andel per Claude Code / Chats / Cowork / Other),
   plus många modellspecifika fält som oftast är `null`
@@ -45,11 +30,7 @@ Samma mätare visas också i en flytande widget (klassen `Widget`) som alltid li
   `Widget` gör det själv, med fysiska pixlar från Win32. Pekaren läses med `GetCursorPos`
 - `settings.json` i `%APPDATA%\ClaudeUsageTray` (x, y, visible, locked). Position sparas bara när
   widgeten dras, så reservplaceringen vid bortkopplad skärm skriver inte över den
-- Windows tooltip max 127 tecken (gäller tray-ikonerna, inte widgetens egen tooltip)
 - Ikoner ritas i 4x upplösning och skalas ner (PIL-bågar har ingen antialiasing)
-- Ikonfärg följer Windows-temat (`SystemUsesLightTheme` i registret); orange ≥ 80 %, röd ≥ 95 %, nedtonad vid fel
-- Notis via `icon.notify` när sessionen passerar 80/95 %, en gång per nollställningsperiod
-- `log()` skriver till konsolen; är en no-op under `pythonw` (sys.stdout är None)
 
 ## Språk
 UI-texter och kommentarer på svenska.
