@@ -1,0 +1,3 @@
+# För att bygga ClaudeUsage.exe, lokalt och i GitHub Actions
+-r requirements.txt
+pyinstaller==6.22.3

@@ -1,4 +1,6 @@
-pystray>=0.19
+# pystray: TrayIcon ersätter privata metoder (_message, _on_notify), kontrollera dem innan du höjer
+pystray>=0.19,<0.20
 Pillow>=10.1
-curl_cffi>=0.7
+# curl_cffi: styr Cloudflare-imitationen, en ny version kan bete sig annorlunda
+curl_cffi>=0.17,<0.18
 keyring>=24

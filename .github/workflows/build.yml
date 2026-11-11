@@ -1,0 +1,41 @@
+# Bygger ClaudeUsage.exe vid push och PR mot main, så att ett trasigt bygge syns direkt.
+# Återanvänds av release.yml, så att en release byggs på exakt samma sätt.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Check that the app imports
+        run: python -c "import claude_usage_tray as m; print('Claude Usage', m.__version__)"
+
+      - name: Build exe
+        run: pyinstaller --noconfirm --onefile --noconsole --name ClaudeUsage --icon assets/icon.ico claude_usage_tray.py
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ClaudeUsage
+          path: dist/ClaudeUsage.exe
+          if-no-files-found: error
+          retention-days: 7

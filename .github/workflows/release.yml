@@ -1,0 +1,65 @@
+# Skapar en GitHub Release med ClaudeUsage.exe och dess SHA256 när en tagg v* pushas.
+# Taggen måste stämma med __version__ i claude_usage_tray.py, t.ex. v1.0.0.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check that the tag matches __version__
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = python -c "import ast, pathlib; tree = ast.parse(pathlib.Path('claude_usage_tray.py').read_text('utf-8')); print(next(n.value.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == '__version__'))"
+          if ("v$version" -ne $env:TAG) {
+            Write-Error "The tag $env:TAG does not match __version__ = $version in claude_usage_tray.py"
+            exit 1
+          }
+          Write-Output "Tag $env:TAG matches __version__ $version"
+
+  build:
+    needs: check-version
+    uses: ./.github/workflows/build.yml
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ClaudeUsage
+          path: dist
+
+      - name: Write SHA256 file
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/ClaudeUsage.exe -Algorithm SHA256).Hash.ToLower()
+          # Samma format som sha256sum, så att "sha256sum -c" också fungerar
+          [IO.File]::WriteAllText("dist/ClaudeUsage.exe.sha256", "$hash  ClaudeUsage.exe`n")
+          "SHA256=$hash" >> $env:GITHUB_ENV
+
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $notes = "SHA256 of ClaudeUsage.exe: ``$env:SHA256``"
+          gh release create $env:TAG dist/ClaudeUsage.exe dist/ClaudeUsage.exe.sha256 `
+            --repo $env:GITHUB_REPOSITORY --title "Claude Usage $env:TAG" --notes $notes --generate-notes --verify-tag
