@@ -11,9 +11,15 @@
   meddelandeloopen läser bara den trådens fönster). Därför en tråd per ikon i `App._icon_thread`.
 - `TrayIcon` ersätter pystrays privata `_message` för att sätta fast `uID` och GUID (`TRAY_IDS`), annars
   blir `uID` alltid 0 (pystray skickar felstavat `hID`). Windows sparar valet i "Andra ikoner i systemfältet"
-  per GUID. Ändra inte GUID:erna, och kontrollera `_message` vid uppgradering av pystray
+  per GUID. Ändra inte GUID:erna. pystray är låst till 0.19.x i requirements.txt: kontrollera `_message`
+  och `_on_notify` innan du höjer
+- Windows knyter en GUID till utgivaren för signerade program (python.exe/pythonw.exe), annars till
+  sökvägen. Den osignerade exe-filen får därför GUID:er härledda från sin sökväg (`tray_guid`). Med
+  `TRAY_IDS` direkt nekas exe-filen ikonerna
 - En GUID kan bara ägas av en process: en andra instans nekas ikonerna (`_tray_added` hindrar den från att
   ändra eller ta bort den första instansens), men visar ändå en egen widget
+- `TrayIcon._on_notify` bygger om menyn vid högerklick, eftersom pystray bygger den i förväg. Bocken för
+  "Starta med Windows" läses alltid från registret (`autostart_enabled`), aldrig från settings.json
 - Widgetens ✕ visas vid hovring, även när positionen är låst. Trayns "Visa/Dölj widget" kräver
   `_update_tray_menus`, eftersom pystray bara bygger om menyn när `update_menu` anropas
 - Huvudtråden kör Tk:s `mainloop`. All Tk-kod måste köras där: andra trådar lägger en funktion i
@@ -30,7 +36,15 @@
   `Widget` gör det själv, med fysiska pixlar från Win32. Pekaren läses med `GetCursorPos`
 - `settings.json` i `%APPDATA%\ClaudeUsageTray` (x, y, visible, locked). Position sparas bara när
   widgeten dras, så reservplaceringen vid bortkopplad skärm skriver inte över den
-- Ikoner ritas i 4x upplösning och skalas ner (PIL-bågar har ingen antialiasing)
+- Ikoner ritas i 4x upplösning och skalas ner (PIL-bågar har ingen antialiasing). `assets/icon.ico`
+  skapas med `scripts/make_icon.py`. Kör det igen om `make_gauge` eller `make_app_icon` ändras
+
+## Release
+- Taggen `vX.Y.Z` måste stämma med `__version__`, annars stoppar release.yml. Testa exe-bygget lokalt i
+  `.venv` med requirements-build.txt
+- curl_cffi är låst till 0.17.x, eftersom en ny version kan imitera Chrome annorlunda mot Cloudflare
 
 ## Språk
-UI-texter och kommentarer på svenska.
+- UI-texter finns på engelska och svenska i `TEXTS` och hämtas med `t()`. Lägg alltid till båda.
+  Språket följer Windows visningsspråk. `CLAUDE_USAGE_LANG=sv` eller `en` tvingar fram ett språk vid test
+- Kommentarer och loggmeddelanden på svenska
