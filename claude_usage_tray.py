@@ -50,8 +50,6 @@ TRAY_IDS = {
     "week": (2, "223945e3-9509-47be-9fa2-ca07a8d589c5"),
 }
 
-WEEKDAYS_SV = ["mån", "tis", "ons", "tors", "fre", "lör", "sön"]
-
 
 def log(msg: str) -> None:
     """Skriver till konsolen när appen körs med python (gör inget med pythonw)."""
@@ -74,12 +72,7 @@ class SessionKeyDialog(simpledialog.Dialog):
 
     def body(self, master):
         self.attributes("-topmost", True)
-        tk.Label(
-            master,
-            text="Klistra in värdet på cookien 'sessionKey' från claude.ai\n"
-                 "(F12 → Application → Cookies → https://claude.ai):",
-            justify="left",
-        ).pack(anchor="w")
+        tk.Label(master, text=t("key_prompt"), justify="left").pack(anchor="w")
         self.entry = tk.Entry(master, show="*", width=50)
         self.entry.pack(fill="x", pady=(6, 0))
         self.after(50, self.entry.focus_force)
@@ -87,8 +80,8 @@ class SessionKeyDialog(simpledialog.Dialog):
 
     def buttonbox(self):
         box = tk.Frame(self)
-        tk.Button(box, text="OK", width=10, command=self.ok, default="active").pack(side="left", padx=5, pady=5)
-        tk.Button(box, text="Avbryt", width=10, command=self.cancel).pack(side="left", padx=5, pady=5)
+        tk.Button(box, text=t("ok"), width=10, command=self.ok, default="active").pack(side="left", padx=5, pady=5)
+        tk.Button(box, text=t("cancel"), width=10, command=self.cancel).pack(side="left", padx=5, pady=5)
         self.bind("<Return>", self.ok)
         self.bind("<Escape>", self.cancel)
         box.pack()
@@ -216,6 +209,94 @@ def round_window_corners(win: tk.Misc) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Språk – engelska, eller svenska om Windows visas på svenska
+# --------------------------------------------------------------------------- #
+LANG_ENV = "CLAUDE_USAGE_LANG"      # för test: tvingar fram "en" eller "sv"
+LANG_SWEDISH = 0x1D                 # primärt språk-id för svenska (alla regioner)
+
+TEXTS = {
+    "en": {
+        "session": "Session",
+        "week": "Week",
+        "weekdays": "Mon Tue Wed Thu Fri Sat Sun",
+        "line_reset": "(resets {when})",
+        "tip_title": "Claude – {label}",
+        "tip_used": "{pct}% used",
+        "tip_reset": " · resets {when}",
+        "loading": "Loading…",
+        "updated": "Updated {time}",
+        "menu_refresh": "Refresh now",
+        "menu_open_usage": "Open usage in browser",
+        "menu_change_key": "Change sessionKey…",
+        "menu_close_widget": "Close widget",
+        "menu_show_widget": "Show widget",
+        "menu_hide_widget": "Hide widget",
+        "menu_lock": "Lock position",
+        "menu_quit": "Quit Claude Usage",
+        "key_prompt": "Paste the value of the 'sessionKey' cookie from claude.ai\n"
+                      "(F12 → Application → Cookies → https://claude.ai):",
+        "ok": "OK",
+        "cancel": "Cancel",
+        "err_no_key": "No sessionKey – right-click → Change sessionKey",
+        "err_auth": "sessionKey invalid or expired ({detail})",
+        "err_fetch": "Could not fetch: {detail}",
+        "notify": "You have used {pct}% of the session. Resets {when}.",
+    },
+    "sv": {
+        "session": "Session",
+        "week": "Vecka",
+        "weekdays": "mån tis ons tors fre lör sön",
+        "line_reset": "(nollst. {when})",
+        "tip_title": "Claude – {label}",
+        "tip_used": "{pct}% använt",
+        "tip_reset": " · nollst. {when}",
+        "loading": "Hämtar…",
+        "updated": "Uppdaterad {time}",
+        "menu_refresh": "Uppdatera nu",
+        "menu_open_usage": "Öppna användning i webbläsaren",
+        "menu_change_key": "Byt sessionKey…",
+        "menu_close_widget": "Stäng widget",
+        "menu_show_widget": "Visa widget",
+        "menu_hide_widget": "Dölj widget",
+        "menu_lock": "Lås position",
+        "menu_quit": "Avsluta Claude Usage",
+        "key_prompt": "Klistra in värdet på cookien 'sessionKey' från claude.ai\n"
+                      "(F12 → Application → Cookies → https://claude.ai):",
+        "ok": "OK",
+        "cancel": "Avbryt",
+        "err_no_key": "Ingen sessionKey – högerklicka → Byt sessionKey",
+        "err_auth": "sessionKey ogiltig/utgången ({detail})",
+        "err_fetch": "Kunde inte hämta: {detail}",
+        "notify": "Du har använt {pct}% av sessionen. Nollställs {when}.",
+    },
+}
+
+kernel32 = ctypes.WinDLL("kernel32")
+kernel32.GetUserDefaultUILanguage.restype = wintypes.WORD
+
+
+def detect_language() -> str:
+    """Svenska om Windows visningsspråk är svenska, annars engelska."""
+    forced = os.environ.get(LANG_ENV, "").strip().lower()
+    if forced in TEXTS:
+        return forced
+    try:
+        lang_id = kernel32.GetUserDefaultUILanguage()
+    except OSError:
+        return "en"
+    return "sv" if lang_id & 0x3FF == LANG_SWEDISH else "en"
+
+
+LANG = detect_language()
+
+
+def t(key: str, **values) -> str:
+    """Hämtar en UI-text på appens språk. Saknas den används engelska."""
+    text = TEXTS[LANG].get(key) or TEXTS["en"][key]
+    return text.format(**values) if values else text
+
+
+# --------------------------------------------------------------------------- #
 #  API-klient
 # --------------------------------------------------------------------------- #
 class AuthError(Exception):
@@ -270,7 +351,7 @@ def fmt_reset(dt: datetime | None) -> str:
     now = datetime.now().astimezone()
     if dt.date() == now.date():
         return dt.strftime("%H:%M")
-    return f"{WEEKDAYS_SV[dt.weekday()]} {dt.strftime('%H:%M')}"
+    return f"{t('weekdays').split()[dt.weekday()]} {dt.strftime('%H:%M')}"
 
 
 def fmt_line(label: str, window) -> str:
@@ -279,10 +360,8 @@ def fmt_line(label: str, window) -> str:
     pct, reset = window
     s = f"{label}: {round(pct)}%"
     if reset:
-        s += f" (nollst. {fmt_reset(reset)})"
+        s += " " + t("line_reset", when=fmt_reset(reset))
     return s
-
-
 
 
 # --------------------------------------------------------------------------- #
@@ -610,7 +689,7 @@ class Widget:
                 self.menu.add_command(label=text, command=action)
         # "Lås position" före sista avdelaren, alltså direkt efter "Stäng widget"
         self.menu.insert_checkbutton(
-            self.menu.index("end") - 1, label="Lås position", variable=self.locked, command=self._lock_changed,
+            self.menu.index("end") - 1, label=t("menu_lock"), variable=self.locked, command=self._lock_changed,
         )
         self.win.focus_force()  # annars stängs inte menyn av ett klick utanför
         cx, cy = cursor_pos()
@@ -708,7 +787,7 @@ class TrayIcon(pystray.Icon):
 # --------------------------------------------------------------------------- #
 class App:
     KEYS = ("session", "week")
-    LABELS = {"session": "Session", "week": "Vecka"}
+    LABELS = {"session": t("session"), "week": t("week")}
 
     def __init__(self):
         self.settings = load_settings()
@@ -732,24 +811,24 @@ class App:
     def _menu_entries(self, for_widget: bool = False) -> list:
         """Menyraderna i ordning: (text, åtgärd), None = avdelare. Utan åtgärd = bara text."""
         widget_entry = (
-            ("Stäng widget", self._hide_widget) if for_widget
+            (t("menu_close_widget"), self._hide_widget) if for_widget
             else (self._widget_menu_text, self._toggle_widget)
         )
         return [
-            (lambda: fmt_line("Session", self.data["session"]), None),
-            (lambda: fmt_line("Vecka", self.data["week"]), None),
+            (lambda: fmt_line(self.LABELS["session"], self.data["session"]), None),
+            (lambda: fmt_line(self.LABELS["week"], self.data["week"]), None),
             (self._status_line, None),
             None,
-            ("Uppdatera nu", self._refresh_now),
-            ("Öppna användning i webbläsaren", self._open_usage_page),
-            ("Byt sessionKey…", self._change_key),
+            (t("menu_refresh"), self._refresh_now),
+            (t("menu_open_usage"), self._open_usage_page),
+            (t("menu_change_key"), self._change_key),
             widget_entry,
             None,
-            ("Avsluta Claude Usage", self._quit),
+            (t("menu_quit"), self._quit),
         ]
 
     def _widget_menu_text(self) -> str:
-        return "Dölj widget" if self.settings["visible"] else "Visa widget"
+        return t("menu_hide_widget") if self.settings["visible"] else t("menu_show_widget")
 
     def _build_menu(self) -> pystray.Menu:
         items = []
@@ -758,7 +837,7 @@ class App:
                 items.append(pystray.Menu.SEPARATOR)
                 continue
             text, action = entry
-            label = (lambda _, t=text: t()) if callable(text) else text
+            label = (lambda _, fn=text: fn()) if callable(text) else text
             if action is None:
                 items.append(pystray.MenuItem(label, None, enabled=False))
             else:
@@ -775,8 +854,8 @@ class App:
         if self.error:
             return f"⚠ {self.error}"
         if self.updated:
-            return f"Uppdaterad {self.updated.strftime('%H:%M')}"
-        return "Hämtar…"
+            return t("updated", time=self.updated.strftime("%H:%M"))
+        return t("loading")
 
     def _refresh_now(self):
         self.wake_evt.set()
@@ -885,7 +964,7 @@ class App:
     def _refresh(self):
         key = get_session_key()
         if not key:
-            self.error = "Ingen sessionKey – högerklicka → Byt sessionKey"
+            self.error = t("err_no_key")
             self._render()
             return
 
@@ -901,11 +980,11 @@ class App:
             log(f"{fmt_line('Session', self.data['session'])} | {fmt_line('Vecka', self.data['week'])}")
             self._maybe_notify()
         except AuthError as e:
-            self.error = f"sessionKey ogiltig/utgången ({e})"
+            self.error = t("err_auth", detail=e)
             self.client = None
             log(f"FEL: {self.error}")
         except Exception as e:  # nätverk, Cloudflare, ändrat API …
-            self.error = f"Kunde inte hämta: {type(e).__name__}"
+            self.error = t("err_fetch", detail=type(e).__name__)
             log(f"FEL: {e!r}")
         self._render()
 
@@ -915,32 +994,28 @@ class App:
         if not win or icon is None or not hasattr(icon, "notify"):
             return
         pct, reset = win
-        for t in NOTIFY_THRESHOLDS:
-            tag = (t, reset)
-            if pct >= t and tag not in self.notified:
+        for threshold in NOTIFY_THRESHOLDS:
+            tag = (threshold, reset)
+            if pct >= threshold and tag not in self.notified:
                 self.notified.add(tag)
                 try:
-                    icon.notify(
-                        f"Du har använt {round(pct)}% av sessionen. "
-                        f"Nollställs {fmt_reset(reset)}.",
-                        "Claude Usage",
-                    )
+                    icon.notify(t("notify", pct=round(pct), when=fmt_reset(reset)), "Claude Usage")
                 except Exception:
                     pass
 
     def _tooltip_text(self, key: str) -> str:
-        lines = [f"Claude – {self.LABELS[key].lower()}"]
+        lines = [t("tip_title", label=self.LABELS[key].lower())]
         win = self.data[key]
         if win:
             pct, reset = win
-            line = f"{round(pct)}% använt"
+            line = t("tip_used", pct=round(pct))
             if reset:
-                line += f" · nollst. {fmt_reset(reset)}"
+                line += t("tip_reset", when=fmt_reset(reset))
             lines.append(line)
         if self.error:
             lines.append(f"⚠ {self.error}")
         elif not self.updated:
-            lines.append("Hämtar…")
+            lines.append(t("loading"))
         return "\n".join(lines)
 
     def _widget_state(self) -> dict:
@@ -975,10 +1050,10 @@ class App:
 
         threads = []
         for key in self.KEYS:   # session först så att den hamnar till vänster
-            t = threading.Thread(target=self._icon_thread, args=(key,), daemon=True)
-            t.start()
+            thread = threading.Thread(target=self._icon_thread, args=(key,), daemon=True)
+            thread.start()
             self.ready[key].wait(10)
-            threads.append(t)
+            threads.append(thread)
 
         log(f"Ikoner startade: {', '.join(k for k in self.KEYS if self.ready[k].is_set())}")
         threading.Thread(target=self._poll_loop, daemon=True).start()
@@ -987,8 +1062,8 @@ class App:
 
         self.root.after(PUMP_MS, self._pump)
         self.root.mainloop()
-        for t in threads:       # låt ikonerna hinna ta bort sig från systemfältet
-            t.join(2)
+        for thread in threads:  # låt ikonerna hinna ta bort sig från systemfältet
+            thread.join(2)
         log("Avslutat")
 
 
