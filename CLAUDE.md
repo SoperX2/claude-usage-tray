@@ -35,7 +35,7 @@
   mätarnas mjuka kanter. Rundade hörn via DWM (bara Windows 11)
 - Processen är DPI-medveten per skärm (`SetProcessDpiAwareness(2)`), men Tk skalar inte om widgeten.
   `Widget` gör det själv, med fysiska pixlar från Win32. Pekaren läses med `GetCursorPos`
-- `settings.json` i `%APPDATA%\ClaudeUsageTray` (x, y, visible, locked). Position sparas bara när
+- `settings.json` i `%APPDATA%\ClaudeUsageTray`. Position sparas bara när
   widgeten dras, så reservplaceringen vid bortkopplad skärm skriver inte över den
 - Ikoner ritas i 4x upplösning och skalas ner (PIL-bågar har ingen antialiasing). `assets/icon.ico`
   skapas med `scripts/make_icon.py`. Kör det igen om `make_gauge` eller `make_app_icon` ändras
