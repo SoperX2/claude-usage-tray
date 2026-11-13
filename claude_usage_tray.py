@@ -27,7 +27,7 @@ import uuid
 import webbrowser
 import winreg
 from ctypes import wintypes
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tkinter import simpledialog
 
@@ -44,7 +44,7 @@ REPO_URL = "https://github.com/SoperX2/claude-usage-tray"
 BASE_URL = "https://claude.ai/api"
 USAGE_PAGE = "https://claude.ai/settings/usage"
 POLL_SECONDS = 120          # hur ofta vi hämtar ny data
-NOTIFY_THRESHOLDS = (80, 95)  # notis när sessionen passerar dessa %
+NOTIFY_THRESHOLDS = (95, 99)  # notis när session eller vecka passerar dessa %
 PUMP_MS = 100               # hur ofta Tk läser kön från de andra trådarna
 SETTINGS_PATH = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME / "settings.json"
 
@@ -164,7 +164,8 @@ class AboutDialog(AppDialog):
 #  Inställningar – position, synlighet och lås för widgeten
 # --------------------------------------------------------------------------- #
 def load_settings() -> dict:
-    settings = {"x": None, "y": None, "visible": True, "locked": False}
+    # notified: visade användningsnotiser (se notice_key), så att en omstart inte visar dem igen
+    settings = {"x": None, "y": None, "visible": True, "locked": False, "notifications": True, "notified": []}
     try:
         saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if isinstance(saved, dict):
@@ -173,6 +174,8 @@ def load_settings() -> dict:
         pass
     except (OSError, ValueError) as e:
         log(f"Kunde inte läsa inställningarna, använder standardvärden: {e!r}")
+    if not isinstance(settings["notified"], list):
+        settings["notified"] = []
     return settings
 
 
@@ -374,7 +377,9 @@ TEXTS = {
         "err_no_key": "No sessionKey – right-click → Change sessionKey",
         "err_auth": "sessionKey invalid or expired ({detail})",
         "err_fetch": "Could not fetch: {detail}",
-        "notify": "You have used {pct}% of the session. Resets {when}.",
+        "notify_session": "Session: {pct}% used, resets {when}",
+        "notify_week": "Week: {pct}% used, resets {when}",
+        "menu_notifications": "Notifications",
         "err_autostart": "Could not change Start with Windows: {detail}",
     },
     "sv": {
@@ -408,7 +413,9 @@ TEXTS = {
         "err_no_key": "Ingen sessionKey – högerklicka → Byt sessionKey",
         "err_auth": "sessionKey ogiltig/utgången ({detail})",
         "err_fetch": "Kunde inte hämta: {detail}",
-        "notify": "Du har använt {pct}% av sessionen. Nollställs {when}.",
+        "notify_session": "Session: {pct} % använt, nollställs {when}",
+        "notify_week": "Vecka: {pct} % använt, nollställs {when}",
+        "menu_notifications": "Notiser",
         "err_autostart": "Kunde inte ändra Starta med Windows: {detail}",
     },
 }
@@ -472,15 +479,54 @@ class ClaudeClient:
 # --------------------------------------------------------------------------- #
 #  Tolkning & formatering
 # --------------------------------------------------------------------------- #
+def round_to_minute(dt: datetime) -> datetime:
+    """Närmaste hela minut. resets_at har mikrosekunder som ändras vid varje anrop och kan hamna
+    på båda sidor om minutgränsen (…:59.96 eller …:00.18), så avrundning nedåt räcker inte."""
+    return (dt + timedelta(seconds=30)).replace(second=0, microsecond=0)
+
+
 def parse_window(block: dict | None) -> tuple[float, datetime | None] | None:
-    """{'utilization': 35.0, 'resets_at': '...'} -> (35.0, lokal datetime)"""
+    """{'utilization': 35.0, 'resets_at': '...'} -> (35.0, lokal datetime avrundad till minut)"""
     if not block or block.get("utilization") is None:
         return None
     reset = block.get("resets_at")
     dt = None
     if reset:
-        dt = datetime.fromisoformat(reset.replace("Z", "+00:00")).astimezone()
+        dt = round_to_minute(datetime.fromisoformat(reset.replace("Z", "+00:00")).astimezone())
     return float(block["utilization"]), dt
+
+
+# --------------------------------------------------------------------------- #
+#  Användningsnotiser – högst en per gräns, fönster och period, även över omstarter
+# --------------------------------------------------------------------------- #
+def notice_key(window: str, threshold: int, reset: datetime) -> str:
+    """T.ex. 'session|95|2026-11-13T01:50Z'. reset är redan avrundad av parse_window."""
+    return f"{window}|{threshold}|{reset.astimezone(timezone.utc):%Y-%m-%dT%H:%MZ}"
+
+
+def notice_reset(key: str) -> datetime | None:
+    try:
+        return datetime.strptime(key.rsplit("|", 1)[1], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+    except (IndexError, ValueError):
+        return None
+
+
+def check_notices(data: dict, notified: list, now: datetime) -> tuple[list[str], list[str]]:
+    """Ger (notistexter att visa, nya listan över visade notiser). Poster vars period redan
+    nollställts rensas bort. Passeras flera gränser på en gång visas bara den högsta."""
+    kept = [k for k in notified if isinstance(k, str) and (r := notice_reset(k)) and r > now]
+    messages = []
+    for window, text_key in (("session", "notify_session"), ("week", "notify_week")):
+        win = data.get(window)
+        if not win or win[1] is None:   # utan nollställningstid går perioden inte att avgöra
+            continue
+        pct, reset = win
+        new = [notice_key(window, th, reset) for th in NOTIFY_THRESHOLDS if pct >= th]
+        new = [k for k in new if k not in kept]
+        if new:
+            kept.extend(new)
+            messages.append(t(text_key, pct=round(pct), when=fmt_reset(reset)))
+    return messages, kept
 
 
 def fmt_reset(dt: datetime | None) -> str:
@@ -951,7 +997,6 @@ class App:
         self.updated: datetime | None = None
         self.client: ClaudeClient | None = None
         self.client_key: str | None = None
-        self.notified: set[tuple] = set()
         self.icons: dict[str, pystray.Icon] = {}
         self.ready = {k: threading.Event() for k in self.KEYS}
         self.stop_evt = threading.Event()
@@ -977,6 +1022,7 @@ class App:
             (t("menu_change_key"), self._change_key),
             *widget_entries,
             None,
+            (t("menu_notifications"), self._toggle_notifications, lambda: bool(self.settings["notifications"])),
             (t("menu_autostart"), self._toggle_autostart, autostart_enabled),
             (t("menu_about"), self._show_about),
             None,
@@ -1023,6 +1069,14 @@ class App:
 
     def _toggle_lock(self):
         self.ui_queue.put(self.widget.toggle_lock)
+
+    def _toggle_notifications(self):
+        # Inställningarna ändras och sparas bara i Tk-tråden
+        def toggle():
+            self.settings["notifications"] = not self.settings["notifications"]
+            save_settings(self.settings)
+            log(f"Användningsnotiser: {'på' if self.settings['notifications'] else 'av'}")
+        self.ui_queue.put(toggle)
 
     def _toggle_autostart(self):
         # Utgår från registret, inte från bocken, som kan vara inaktuell
@@ -1157,7 +1211,8 @@ class App:
         self._render()
 
     def _notify(self, message: str) -> None:
-        """Windows-notis från sessionsikonen. Säkert från alla trådar."""
+        """Windows-notis från sessionsikonen. Säkert från alla trådar. Används även för fel,
+        som alltid visas oavsett menyvalet Notiser."""
         icon = self.icons.get("session")
         if icon is None:
             return
@@ -1167,15 +1222,18 @@ class App:
             log(f"FEL: kunde inte visa notisen: {e!r}")
 
     def _maybe_notify(self):
-        win = self.data["session"]
-        if not win:
+        """Användningsnotiser. Körs i polling-tråden."""
+        if not self.settings["notifications"]:
             return
-        pct, reset = win
-        for threshold in NOTIFY_THRESHOLDS:
-            tag = (threshold, reset)
-            if pct >= threshold and tag not in self.notified:
-                self.notified.add(tag)
-                self._notify(t("notify", pct=round(pct), when=fmt_reset(reset)))
+        old = self.settings["notified"]
+        messages, notified = check_notices(self.data, old, datetime.now(timezone.utc))
+        if notified != old:
+            # Ny lista i stället för att ändra den gamla, som Tk-tråden kan hålla på att spara
+            self.settings["notified"] = notified
+            self.ui_queue.put(lambda: save_settings(self.settings))
+        if messages:
+            # En notis åt gången syns, så session och vecka slås ihop
+            self._notify("\n".join(messages))
 
     def _tooltip_text(self, key: str) -> str:
         lines = [t("tip_title", label=self.LABELS[key].lower())]
