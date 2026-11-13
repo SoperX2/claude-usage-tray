@@ -32,10 +32,13 @@ The exe is not code-signed, so Windows SmartScreen warns the first time you star
 If you want to check the file before you run it:
 
 - **It is built from this repo.** Each release is built by [GitHub Actions](.github/workflows/release.yml) from the source code you can read here, not on someone's computer.
-- **Compare the checksum.** Each release has a `ClaudeUsage.exe.sha256` file. Run this in PowerShell in the folder with the exe and check that the hash is the same:
+- **Compare the checksum.** Each release has a `ClaudeUsage.exe.sha256` file. Run this in PowerShell. It downloads the checksum of the latest release and compares it with the exe in your Downloads folder. It prints `True` if they match:
   ```powershell
-  Get-FileHash .\ClaudeUsage.exe -Algorithm SHA256
+  Invoke-WebRequest "https://github.com/SoperX2/claude-usage-tray/releases/latest/download/ClaudeUsage.exe.sha256" -OutFile "$env:TEMP\cu.sha256"
+  $expected = ((Get-Content "$env:TEMP\cu.sha256" -Raw).Trim() -split '\s+')[0]
+  (Get-FileHash "$env:USERPROFILE\Downloads\ClaudeUsage.exe").Hash -eq $expected
   ```
+  If you saved the exe somewhere else, change the path on the last line.
 - **Antivirus software** sometimes flags apps built with PyInstaller even when they are harmless, because some malware is packaged the same way.
 
 **Smart App Control:** on Windows 11 with Smart App Control turned on, Windows can block unsigned apps completely, with no **Run anyway** button. Then [run it from source](#run-from-source) instead.

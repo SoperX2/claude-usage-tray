@@ -40,26 +40,69 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    # Två körningar för samma tagg får aldrig skapa releaser samtidigt
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
     steps:
+      # En tagg som tagits bort och pushats igen lämnar den gamla releasen kvar som utkast med samma
+      # tag_name. Utkast räknas därför också, annars blandas filer från olika körningar.
+      - name: Stop if a release for this tag already exists
+        shell: pwsh
+        run: |
+          # En rad JSON per release. Tolkas i PowerShell, så att inga citattecken skickas till gh.
+          $lines = gh api "repos/$env:GH_REPO/releases" --paginate --jq '.[] | {tag_name, draft, html_url}'
+          if ($LASTEXITCODE -ne 0) { Write-Error "Could not list the releases"; exit 1 }
+          $existing = @($lines | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tag_name -eq $env:TAG })
+          if ($existing.Count -gt 0) {
+            $list = ($existing | ForEach-Object { "$($_.html_url) (draft: $($_.draft))" }) -join "`n"
+            Write-Error ("A release for $env:TAG already exists. Delete it (drafts too) or push a new version tag. " +
+              "Files from different workflow runs must never be mixed in one release.`n$list")
+            exit 1
+          }
+          Write-Output "No release exists for $env:TAG"
+
       - uses: actions/download-artifact@v8
         with:
           name: ClaudeUsage
           path: dist
 
-      - name: Write SHA256 file
+      # Hashen räknas på exakt den fil som laddas upp, i samma steg, direkt före uppladdningen
+      - name: Hash the exe and create the release
         shell: pwsh
         run: |
           $hash = (Get-FileHash dist/ClaudeUsage.exe -Algorithm SHA256).Hash.ToLower()
           # Samma format som sha256sum, så att "sha256sum -c" också fungerar
           [IO.File]::WriteAllText("dist/ClaudeUsage.exe.sha256", "$hash  ClaudeUsage.exe`n")
-          "SHA256=$hash" >> $env:GITHUB_ENV
-
-      - name: Create release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          $notes = "SHA256 of ClaudeUsage.exe: ``$env:SHA256``"
+          Write-Output "SHA256 of ClaudeUsage.exe: $hash"
           gh release create $env:TAG dist/ClaudeUsage.exe dist/ClaudeUsage.exe.sha256 `
-            --repo $env:GITHUB_REPOSITORY --title "Claude Usage $env:TAG" --notes $notes --generate-notes --verify-tag
+            --title "Claude Usage $env:TAG" --notes "SHA256 of ClaudeUsage.exe: ``$hash``" --generate-notes --verify-tag
+          if ($LASTEXITCODE -ne 0) { Write-Error "gh release create failed"; exit 1 }
+
+      - name: Verify the published release
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "verify"
+          New-Item -ItemType Directory $dir | Out-Null
+          gh release download $env:TAG --dir $dir --pattern ClaudeUsage.exe --pattern ClaudeUsage.exe.sha256
+          if ($LASTEXITCODE -ne 0) { Write-Error "Could not download the published files"; exit 1 }
+          $content = [IO.File]::ReadAllText("$dir/ClaudeUsage.exe.sha256")
+          $expected = ($content.Trim() -split '\s+')[0]
+          $actual = (Get-FileHash "$dir/ClaudeUsage.exe" -Algorithm SHA256).Hash.ToLower()
+          $release = gh api "repos/$env:GH_REPO/releases/tags/$env:TAG" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { Write-Error "Could not read the release"; exit 1 }
+          $digest = ($release.assets | Where-Object { $_.name -eq 'ClaudeUsage.exe' }).digest
+          Write-Output "exe:         $actual"
+          Write-Output ".sha256:     $expected"
+          Write-Output "GitHub:      $digest"
+          # ::error:: i stället för Write-Error, som avbryter direkt, så att alla fel visas
+          $ok = $true
+          if ($content -cne "$actual  ClaudeUsage.exe`n") { Write-Output "::error::ClaudeUsage.exe.sha256 is not '<lowercase hash>  ClaudeUsage.exe'"; $ok = $false }
+          if ($expected -cne $actual) { Write-Output "::error::ClaudeUsage.exe.sha256 does not match the published exe"; $ok = $false }
+          if ($digest -cne "sha256:$actual") { Write-Output "::error::GitHub's digest does not match the published exe"; $ok = $false }
+          if (-not $ok) { exit 1 }
+          Write-Output "The published exe, its .sha256 file and GitHub's digest match"
