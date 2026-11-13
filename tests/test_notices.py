@@ -91,5 +91,52 @@ class NoticeTests(unittest.TestCase):
         self.assertEqual(app.load_settings()["notified"], [])
 
 
+class AuthNoticeTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for patcher in (
+            mock.patch.object(app, "SETTINGS_PATH", Path(tmp.name) / "settings.json"),
+            mock.patch.object(app, "get_session_key", return_value="test"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.app = app.App()
+        self.app.settings["notifications"] = False     # felnotisen ska visas ändå
+        self.app._notify = mock.Mock()
+        self.client = mock.Mock()
+        self.client.usage.side_effect = app.AuthError("HTTP 401")
+
+    def refresh(self) -> None:
+        # _refresh släpper klienten vid AuthError, så samma låtsasklient sätts tillbaka varje gång
+        self.app.client, self.app.client_key = self.client, "test"
+        self.app._refresh()
+
+    def test_once_per_expiry_and_again_after_success(self):
+        self.refresh()
+        self.refresh()
+        self.refresh()
+        self.app._notify.assert_called_once_with(
+            "Claude Usage: inloggningen har gått ut. Högerklicka och välj Byt sessionKey.")
+
+        self.client.usage.side_effect = None
+        self.client.usage.return_value = {"five_hour": None, "seven_day": None}
+        self.refresh()
+        self.assertEqual(self.app._notify.call_count, 1)
+
+        self.client.usage.side_effect = app.AuthError("HTTP 403")
+        self.refresh()
+        self.refresh()
+        self.assertEqual(self.app._notify.call_count, 2)
+
+    def test_network_error_does_not_reset(self):
+        self.refresh()
+        self.client.usage.side_effect = ConnectionError("nätverket nere")
+        self.refresh()
+        self.client.usage.side_effect = app.AuthError("HTTP 401")
+        self.refresh()
+        self.app._notify.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

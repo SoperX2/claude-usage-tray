@@ -381,6 +381,7 @@ TEXTS = {
         "notify_week": "Week: {pct}% used, resets {when}",
         "menu_notifications": "Notifications",
         "err_autostart": "Could not change Start with Windows: {detail}",
+        "err_auth_notify": "Claude Usage: your login has expired. Right-click and choose Change sessionKey.",
     },
     "sv": {
         "session": "Session",
@@ -417,6 +418,7 @@ TEXTS = {
         "notify_week": "Vecka: {pct} % använt, nollställs {when}",
         "menu_notifications": "Notiser",
         "err_autostart": "Kunde inte ändra Starta med Windows: {detail}",
+        "err_auth_notify": "Claude Usage: inloggningen har gått ut. Högerklicka och välj Byt sessionKey.",
     },
 }
 
@@ -997,6 +999,7 @@ class App:
         self.updated: datetime | None = None
         self.client: ClaudeClient | None = None
         self.client_key: str | None = None
+        self.auth_notified = False      # notis om utgången inloggning visad, tills en hämtning lyckas
         self.icons: dict[str, pystray.Icon] = {}
         self.ready = {k: threading.Event() for k in self.KEYS}
         self.stop_evt = threading.Event()
@@ -1199,12 +1202,17 @@ class App:
             self.data["week"] = parse_window(data.get("seven_day"))
             self.updated = datetime.now()
             self.error = None
+            self.auth_notified = False
             log(f"{fmt_line('Session', self.data['session'])} | {fmt_line('Vecka', self.data['week'])}")
             self._maybe_notify()
         except AuthError as e:
             self.error = t("err_auth", detail=e)
             self.client = None
             log(f"FEL: {self.error}")
+            # Felnotis, så den visas även när Notiser är avstängt. En gång per utgång.
+            if not self.auth_notified:
+                self.auth_notified = True
+                self._notify(t("err_auth_notify"))
         except Exception as e:  # nätverk, Cloudflare, ändrat API …
             self.error = t("err_fetch", detail=type(e).__name__)
             log(f"FEL: {e!r}")

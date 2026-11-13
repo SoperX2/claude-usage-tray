@@ -48,7 +48,7 @@ If you want to check the file before you run it:
 - **Two tray gauges:** the left one shows the current session (the 5-hour window) and the right one shows the week
 - **Colours:** white, or black on a light taskbar. Orange at 80 % or more, red at 95 % or more, dimmed when the data is stale or failed to load
 - **Hover** for the exact percentage and when the limit resets. **Left-click** to refresh, **right-click** for the menu
-- **Windows notification** when the session or the week passes 95 % and 99 %, for example "Session: 95% used, resets 22:00". Each one is shown at most once per period, even if the app restarts. Turn them off with **Notifications** in the menu. Error notifications are always shown
+- **Windows notification** when the session or the week passes 95 % and 99 %, for example "Session: 95% used, resets 22:00". Each one is shown at most once per period, even if the app restarts. Turn them off with **Notifications** in the menu. Error notifications, for example when your login has expired, are always shown
 - **Refreshes automatically** every two minutes
 - **Floating widget** that stays on top, with the same two gauges (see below)
 - **Start with Windows** from the menu
