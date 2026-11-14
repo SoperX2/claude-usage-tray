@@ -30,8 +30,26 @@ jobs:
       - name: Check that the app imports
         run: python -c "import claude_usage_tray as m; print('Claude Usage', m.__version__)"
 
+      # Versionsinformationen skapas från __version__, så att den aldrig hamnar ur synk
+      - name: Write version info
+        run: python scripts/make_version_info.py build/version_info.txt
+
+      # --noupx: exe-filer packade med UPX flaggas oftare av antivirusprogram. PyInstaller använder bara
+      # UPX om det är installerat, vilket det inte är på GitHubs byggmaskiner, så här ändrar flaggan
+      # ingenting i dag. Den är ett skydd för lokala bygg och om UPX någon gång skulle finnas här.
       - name: Build exe
-        run: pyinstaller --noconfirm --onefile --noconsole --name ClaudeUsage --icon assets/icon.ico claude_usage_tray.py
+        run: pyinstaller --noconfirm --onefile --noconsole --noupx --name ClaudeUsage --icon assets/icon.ico --version-file build/version_info.txt claude_usage_tray.py
+
+      - name: Check the version info in the exe
+        shell: pwsh
+        run: |
+          $expected = python -c "import claude_usage_tray as m; print(m.__version__)"
+          $info = (Get-Item dist/ClaudeUsage.exe).VersionInfo
+          Write-Output "ProductName=$($info.ProductName) ProductVersion=$($info.ProductVersion) FileVersion=$($info.FileVersion)"
+          if ($info.ProductName -ne "Claude Usage" -or $info.ProductVersion -ne $expected -or $info.FileVersion -ne $expected) {
+            Write-Error "The version info in ClaudeUsage.exe does not match __version__ $expected"
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v7
         with:

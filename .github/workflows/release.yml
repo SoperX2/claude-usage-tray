@@ -106,3 +106,56 @@ jobs:
           if ($digest -cne "sha256:$actual") { Write-Output "::error::GitHub's digest does not match the published exe"; $ok = $false }
           if (-not $ok) { exit 1 }
           Write-Output "The published exe, its .sha256 file and GitHub's digest match"
+
+      # Bara information till användarna. Fel här får aldrig göra releasen röd: steget fortsätter
+      # vid fel, och alla förväntade fel blir varningar. Nyckeln skrivs aldrig ut.
+      - name: Scan the exe on VirusTotal
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          if (-not $env:VT_API_KEY) { Write-Output "::warning::VT_API_KEY is not set, skipping VirusTotal"; exit 0 }
+          # gh skriver UTF-8. Utan detta tolkas å, ä, ö och emojier i anteckningarna fel och skrivs tillbaka trasiga.
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+          $headers = @{ "x-apikey" = $env:VT_API_KEY }
+          $exe = "dist/ClaudeUsage.exe"
+          $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $link = "https://www.virustotal.com/gui/file/$sha"
+          $stats = $null
+          try {
+            # upload_url fungerar för alla storlekar. Den vanliga adressen tar bara filer under 32 MB.
+            $uploadUrl = (Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/files/upload_url" -Headers $headers).data
+            $analysisId = (Invoke-RestMethod -Method Post -Uri $uploadUrl -Headers $headers -Form @{ file = Get-Item $exe }).data.id
+          } catch {
+            Write-Output "::warning::VirusTotal upload failed: $($_.Exception.Message)"
+            exit 0
+          }
+          Write-Output "Uploaded to VirusTotal, waiting for the analysis"
+          # Gratis-API:t tillåter 4 anrop per minut, så vi frågar var 30:e sekund i högst 10 minuter.
+          # Ett tillfälligt fel (429, 5xx, nätverk) avbryter inte väntan, vi försöker igen nästa varv.
+          for ($i = 0; $i -lt 20 -and -not $stats; $i++) {
+            Start-Sleep -Seconds 30
+            try {
+              $attr = (Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/analyses/$analysisId" -Headers $headers).data.attributes
+              if ($attr.status -eq "completed") { $stats = $attr.stats }
+            } catch {
+              Write-Output "::warning::VirusTotal status check failed, trying again: $($_.Exception.Message)"
+            }
+          }
+          if ($stats) {
+            $total = $stats.malicious + $stats.suspicious + $stats.undetected + $stats.harmless
+            $line = "**VirusTotal:** $($stats.malicious)/$total engines flag ClaudeUsage.exe as malicious " +
+              "($($stats.suspicious) suspicious). [Full report]($link)"
+          } else {
+            $line = "**VirusTotal:** the analysis was not finished when the release was published. [See the report]($link)"
+          }
+          Write-Output $line
+          $body = gh release view $env:TAG --json body --jq .body
+          if ($LASTEXITCODE -ne 0) { Write-Output "::warning::Could not read the release notes"; exit 0 }
+          $notes = Join-Path $env:RUNNER_TEMP "notes.md"
+          [IO.File]::WriteAllText($notes, (($body -join "`n").TrimEnd() + "`n`n" + $line + "`n"))
+          gh release edit $env:TAG --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { Write-Output "::warning::Could not update the release notes" }
+          exit 0

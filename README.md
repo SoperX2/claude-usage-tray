@@ -39,9 +39,28 @@ If you want to check the file before you run it:
   (Get-FileHash "$env:USERPROFILE\Downloads\ClaudeUsage.exe").Hash -eq $expected
   ```
   If you saved the exe somewhere else, change the path on the last line.
+- **Check the VirusTotal report.** New releases are uploaded to [VirusTotal](https://www.virustotal.com/) when they are published. When the scan succeeds, the release notes show how many antivirus engines flagged the exe, with a link to the full report. If the line is missing, the scan did not run or failed: that says nothing about the file, and you can upload it to VirusTotal yourself.
 - **Antivirus software** sometimes flags apps built with PyInstaller even when they are harmless, because some malware is packaged the same way.
 
 **Smart App Control:** on Windows 11 with Smart App Control turned on, Windows can block unsigned apps completely, with no **Run anyway** button. Then [run it from source](#run-from-source) instead.
+
+### If Microsoft Defender removes the file
+
+Windows has three different protections that can stop the exe. They are easy to mix up:
+
+| | What happens | What it means |
+|---|---|---|
+| **SmartScreen** | A blue "Windows protected your PC" window when you start the exe. The file is still there | Windows has not seen this file often enough to trust it. It is not a virus warning. Click **More info** → **Run anyway** |
+| **Microsoft Defender Antivirus** (real-time protection) | A "Threats found" notification, and the exe disappears or cannot be started | Defender has flagged the file as malware and moved it to quarantine. If the checksum matches the release, this is a false positive |
+| **Smart App Control** (Windows 11 only) | The exe is blocked with no way to run it anyway | Windows blocks all apps that are not signed or known to Microsoft. It does not mean the file is harmful. [Run it from source](#run-from-source) instead |
+
+If Defender removed the file:
+
+1. **Check that it is really this app.** Download the exe again and compare the checksum as described above. Do not restore a file you are unsure about
+2. **Report the false positive to Microsoft** at [Submit a file for malware analysis](https://www.microsoft.com/en-us/wdsi/filesubmission). Choose **Home customer**, upload `ClaudeUsage.exe`, select **Incorrectly detected as malware/malicious**, and enter the detection name. You find it in **Windows Security** → **Virus & threat protection** → **Protection history**. You can follow the submission on the same site. If Microsoft agrees it is a false positive, the fix reaches everyone through normal Defender updates
+3. **After Microsoft has fixed the detection,** update Defender in **Windows Security** → **Virus & threat protection** → **Protection updates** → **Check for updates**. Then restore the file from **Protection history** → **Actions** → **Restore**, or download it again
+
+Do not turn off real-time protection or add exclusions to get around it. Reporting it fixes it for everyone.
 
 ## Features
 
@@ -122,10 +141,11 @@ python -m unittest discover tests
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-build.txt
-.venv\Scripts\pyinstaller --onefile --noconsole --name ClaudeUsage --icon assets\icon.ico claude_usage_tray.py
+.venv\Scripts\python scripts\make_version_info.py build\version_info.txt
+.venv\Scripts\pyinstaller --onefile --noconsole --noupx --name ClaudeUsage --icon assets\icon.ico --version-file build\version_info.txt claude_usage_tray.py
 ```
 
-The exe ends up in `dist\`. The icon is made by `python scripts\make_icon.py` from the same gauge that the app draws.
+The exe ends up in `dist\`. `make_version_info.py` writes the version details that Windows shows under **Properties** → **Details**, from `__version__`, so they always match the app. `--noupx` makes sure the exe is never compressed with UPX, even if UPX is installed on your computer, because antivirus software flags UPX-packed files more often. The icon is made by `python scripts\make_icon.py` from the same gauge that the app draws.
 
 GitHub Actions builds the exe on every push and pull request to `main`. Pushing a tag such as `v1.0.0` creates a release with the exe and its checksum. The tag must match `__version__` in `claude_usage_tray.py`.
 
