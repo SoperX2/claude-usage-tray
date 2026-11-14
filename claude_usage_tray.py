@@ -37,7 +37,7 @@ from curl_cffi import requests
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from pystray._util import win32 as pystray_win32
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 APP_NAME = "ClaudeUsageTray"
 REPO_URL = "https://github.com/SoperX2/claude-usage-tray"
