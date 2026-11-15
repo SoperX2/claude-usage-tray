@@ -147,7 +147,7 @@ python -m venv .venv
 
 The exe ends up in `dist\`. `make_version_info.py` writes the version details that Windows shows under **Properties** → **Details**, from `__version__`, so they always match the app. `--noupx` makes sure the exe is never compressed with UPX, even if UPX is installed on your computer, because antivirus software flags UPX-packed files more often. The icon is made by `python scripts\make_icon.py` from the same gauge that the app draws.
 
-GitHub Actions builds the exe on every push and pull request to `main`. Pushing a tag such as `v1.0.0` creates a release with the exe and its checksum. The tag must match `__version__` in `claude_usage_tray.py`.
+GitHub Actions builds the exe on every push and pull request to `main`. Pushing a tag such as `v1.0.0` creates a release with the exe and its checksum. The tag must match `__version__` in `claude_usage_tray.py`. After the release, the published exe is scanned on VirusTotal (needs the `VT_API_KEY` secret). To scan an existing release again, run **Actions** → **VirusTotal** → **Run workflow** with its tag.
 
 ## How it works
 

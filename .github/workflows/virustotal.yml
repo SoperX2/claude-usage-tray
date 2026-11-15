@@ -1,0 +1,46 @@
+# Laddar upp den publicerade ClaudeUsage.exe för en release till VirusTotal och skriver resultatet i
+# release-anteckningarna. release.yml startar den som en egen körning efter varje release, och den
+# kan startas för hand för en befintlig tagg: Actions → VirusTotal → Run workflow.
+# Filen laddas ner från releasen och byggs inte om, så det är exakt den fil användarna får som scannas.
+#
+# Bara information: körningen är helt skild från release-körningen och kan aldrig påverka den.
+# Tidsgränser, inifrån och ut: skriptet 15 min (VT_BUDGET_SECONDS) < steget 18 min < jobbet 20 min.
+name: VirusTotal
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to scan, for example v1.0.2"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write     # för att uppdatera release-anteckningarna
+    # Två skanningar av samma release får inte skriva anteckningarna samtidigt
+    concurrency:
+      group: virustotal-${{ inputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Taggen skickas som miljövariabel, aldrig direkt in i skriptet, och kontrolleras där
+      - name: Scan the published exe
+        continue-on-error: true
+        timeout-minutes: 18
+        env:
+          TAG: ${{ inputs.tag }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          VT_BUDGET_SECONDS: "900"
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/virustotal_scan.sh
