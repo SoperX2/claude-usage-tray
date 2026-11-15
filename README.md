@@ -66,6 +66,7 @@ Do not turn off real-time protection or add exclusions to get around it. Reporti
 
 - **Two tray gauges:** the left one shows the current session (the 5-hour window) and the right one shows the week
 - **Colours:** white, or black on a light taskbar. Orange at 80 % or more, red at 95 % or more, dimmed when the data is stale or failed to load
+- **Light or dark:** the tray icons always follow the colour of the taskbar, so they stay visible. For the widget, choose **Widget appearance** in the menu: **Follow Windows** (the default), **Light** or **Dark**. **Follow Windows** uses the colour of your apps, which can differ from the taskbar's in Windows (**Settings** → **Personalization** → **Colors**). The app switches as soon as you change the theme in Windows
 - **Hover** for the exact percentage and when the limit resets. **Left-click** to refresh, **right-click** for the menu
 - **Windows notification** when the session or the week passes 95 % and 99 %, for example "Session: 95% used, resets 22:00". Each one is shown at most once per period, even if the app restarts. Turn them off with **Notifications** in the menu. Error notifications, for example when your login has expired, are always shown
 - **Refreshes automatically** every two minutes
@@ -85,9 +86,9 @@ A small borderless window with the same two gauges, always on top. It does not s
 - **Bring it back** with **Show widget** in the tray menu
 - **Quit Claude Usage** in either menu exits the whole app
 
-The widget has a dark background so it looks the same on light and dark wallpapers. Corners are rounded on Windows 11 and square on older versions.
+The widget has a dark background with light gauges, or in the light theme a near-white background with dark gauges and a thin grey border. Either way it looks the same on light and dark wallpapers. Corners are rounded on Windows 11 and square on older versions.
 
-Position, visibility, the lock, the **Notifications** choice and which notifications have been shown are saved in `%APPDATA%\ClaudeUsageTray\settings.json`. If the saved position is not on any connected monitor at startup, the widget is shown in the bottom-right corner of the primary monitor. The saved position is kept until you drag the widget, so it comes back if the monitor is reconnected before the next start.
+Position, visibility, the lock, the **Widget appearance** and **Notifications** choices and which notifications have been shown are saved in `%APPDATA%\ClaudeUsageTray\settings.json`. If the saved position is not on any connected monitor at startup, the widget is shown in the bottom-right corner of the primary monitor. The saved position is kept until you drag the widget, so it comes back if the monitor is reconnected before the next start.
 
 ## Getting your sessionKey
 

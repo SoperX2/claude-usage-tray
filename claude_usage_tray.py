@@ -165,7 +165,12 @@ class AboutDialog(AppDialog):
 # --------------------------------------------------------------------------- #
 def load_settings() -> dict:
     # notified: visade användningsnotiser (se notice_key), så att en omstart inte visar dem igen
-    settings = {"x": None, "y": None, "visible": True, "locked": False, "notifications": True, "notified": []}
+    # theme: widgetens utseende, "system" (följ Windows), "light" eller "dark". Tray-ikonerna
+    # följer alltid aktivitetsfältet, så att de syns.
+    settings = {
+        "x": None, "y": None, "visible": True, "locked": False, "notifications": True, "notified": [],
+        "theme": "system",
+    }
     try:
         saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if isinstance(saved, dict):
@@ -176,6 +181,8 @@ def load_settings() -> dict:
         log(f"Kunde inte läsa inställningarna, använder standardvärden: {e!r}")
     if not isinstance(settings["notified"], list):
         settings["notified"] = []
+    if settings["theme"] not in THEMES:
+        settings["theme"] = "system"
     return settings
 
 
@@ -262,7 +269,10 @@ GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_BORDER_COLOR = 34
+DWMWA_COLOR_DEFAULT = 0xFFFFFFFF
 DWMWCP_ROUND = 2
+WM_SETTINGCHANGE = 0x001A
 
 
 class MONITORINFO(ctypes.Structure):
@@ -339,6 +349,16 @@ def round_window_corners(win: tk.Misc) -> None:
     )
 
 
+def set_window_border(win: tk.Misc, rgb: tuple[int, int, int] | None) -> bool:
+    """Kantlinjens färg via Windows 11, som följer de rundade hörnen. None = Windows standard.
+    Returnerar False på äldre Windows, som inte kan det."""
+    color = wintypes.DWORD(DWMWA_COLOR_DEFAULT if rgb is None else rgb[0] | rgb[1] << 8 | rgb[2] << 16)
+    hr = dwmapi.DwmSetWindowAttribute(
+        int(win.wm_frame(), 16), DWMWA_BORDER_COLOR, ctypes.byref(color), ctypes.sizeof(color),
+    )
+    return hr == 0
+
+
 # --------------------------------------------------------------------------- #
 #  Språk – engelska, eller svenska om Windows visas på svenska
 # --------------------------------------------------------------------------- #
@@ -380,6 +400,10 @@ TEXTS = {
         "notify_session": "Session: {pct}% used, resets {when}",
         "notify_week": "Week: {pct}% used, resets {when}",
         "menu_notifications": "Notifications",
+        "menu_theme": "Widget appearance",
+        "theme_system": "Follow Windows",
+        "theme_light": "Light",
+        "theme_dark": "Dark",
         "err_autostart": "Could not change Start with Windows: {detail}",
         "err_auth_notify": "Claude Usage: your login has expired. Right-click and choose Change sessionKey.",
     },
@@ -417,6 +441,10 @@ TEXTS = {
         "notify_session": "Session: {pct} % använt, nollställs {when}",
         "notify_week": "Vecka: {pct} % använt, nollställs {when}",
         "menu_notifications": "Notiser",
+        "menu_theme": "Widgetens utseende",
+        "theme_system": "Följ Windows",
+        "theme_light": "Ljust",
+        "theme_dark": "Mörkt",
         "err_autostart": "Kunde inte ändra Starta med Windows: {detail}",
         "err_auth_notify": "Claude Usage: inloggningen har gått ut. Högerklicka och välj Byt sessionKey.",
     },
@@ -553,9 +581,27 @@ def fmt_line(label: str, window) -> str:
 # --------------------------------------------------------------------------- #
 #  Ikon – en enkel mätare (gauge), ingen text
 # --------------------------------------------------------------------------- #
+PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+THEMES = ("system", "light", "dark")
+
+
 def taskbar_is_light() -> bool:
-    """Läser Windows-temat så att ikonen syns på både mörkt och ljust aktivitetsfält."""
-    return _read_value(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "SystemUsesLightTheme") == 1
+    """Aktivitetsfältets tema, så att ikonen syns på både mörkt och ljust aktivitetsfält."""
+    return _read_value(PERSONALIZE_KEY, "SystemUsesLightTheme") == 1
+
+
+def apps_are_light() -> bool:
+    """Apparnas tema. Kan skilja sig från aktivitetsfältets, t.ex. ljusa appar och mörkt aktivitetsfält."""
+    return _read_value(PERSONALIZE_KEY, "AppsUseLightTheme") == 1
+
+
+def is_light(theme: str, follow) -> bool:
+    """Valet i menyn Widgetens utseende. "system" frågar Windows med funktionen follow."""
+    if theme == "light":
+        return True
+    if theme == "dark":
+        return False
+    return follow()
 
 
 def make_gauge(pct: float | None, stale: bool = False, light: bool = False, size: int = 64) -> Image.Image:
@@ -643,12 +689,16 @@ class Widget:
     DRAG_THRESHOLD_PX = 3       # så att en darrig klickning inte flyttar widgeten
     CLOSE_PX = 12               # ✕ i hörnet, som bara syns när musen är över widgeten
     CLOSE_FONT_PX = 10
-    CLOSE_FG = "#9a9a9a"
-    CLOSE_FG_HOVER = "#ffffff"
-    # Mörk platta på alla bakgrunder. Mätarnas halvgenomskinliga kanter blandas mot
-    # den, medan -transparentcolor skulle ge en färgad kant på ljusa bakgrunder.
+    # Ogenomskinlig platta. Mätarnas halvgenomskinliga kanter blandas mot den, medan
+    # -transparentcolor skulle ge en färgad kant. Mörkt tema är originalet, och appens ikon
+    # använder alltid den mörka plattan (BG). Ljust tema har mörka mätare, som tray-ikonerna
+    # på ljust aktivitetsfält, och en tunn grå kantlinje så att plattan syns mot vitt.
     BG = (32, 32, 32)
-    BG_HEX = "#202020"
+    PALETTES = {
+        False: {"bg": BG, "tip_fg": "#f0f0f0", "close_fg": "#9a9a9a", "close_hover": "#ffffff", "border": None},
+        True: {"bg": (249, 249, 249), "tip_fg": "#1a1a1a", "close_fg": "#767676", "close_hover": "#000000",
+               "border": (200, 200, 200)},
+    }
 
     def __init__(self, app: "App"):
         self.app = app
@@ -659,25 +709,28 @@ class Widget:
         self.dragging = False
         self.tip_key: str | None = None
         self.tip_job: str | None = None
+        self.sub_menu: tk.Menu | None = None
+        self.light = app._widget_light()
+        self.colors = self.PALETTES[self.light]
 
-        self.win = tk.Toplevel(app.root, bg=self.BG_HEX)
+        self.win = tk.Toplevel(app.root)
         self.win.withdraw()
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
 
         self.labels = {}
         for key in app.KEYS:
-            label = tk.Label(self.win, bg=self.BG_HEX, bd=0, highlightthickness=0)
+            label = tk.Label(self.win, bd=0, highlightthickness=0)
             label.bind("<Enter>", lambda _e, k=key: self._tip_enter(k))
             label.bind("<Leave>", lambda _e: self._tip_cancel())
             self.labels[key] = label
 
         self.close_shown = False
         self.close_btn = tk.Label(
-            self.win, text="✕", bg=self.BG_HEX, fg=self.CLOSE_FG, bd=0, highlightthickness=0, cursor="hand2",
+            self.win, text="✕", bd=0, highlightthickness=0, cursor="hand2",
         )
-        self.close_btn.bind("<Enter>", lambda _e: self.close_btn.configure(fg=self.CLOSE_FG_HOVER))
-        self.close_btn.bind("<Leave>", lambda _e: self.close_btn.configure(fg=self.CLOSE_FG))
+        self.close_btn.bind("<Enter>", lambda _e: self.close_btn.configure(fg=self.colors["close_hover"]))
+        self.close_btn.bind("<Leave>", lambda _e: self.close_btn.configure(fg=self.colors["close_fg"]))
         # "break" stoppar Toplevel-bindningarna nedan, så att ✕ inte startar en dragning
         for sequence in ("<ButtonPress-1>", "<Double-Button-1>", "<B1-Motion>"):
             self.close_btn.bind(sequence, lambda _e: "break")
@@ -692,11 +745,11 @@ class Widget:
         self.win.bind("<Enter>", lambda _e: self._sync_close_button())
         self.win.bind("<Leave>", lambda _e: self._sync_close_button())
 
-        self.tip = tk.Toplevel(self.win, bg=self.BG_HEX)
+        self.tip = tk.Toplevel(self.win)
         self.tip.withdraw()
         self.tip.overrideredirect(True)
         self.tip.attributes("-topmost", True)
-        self.tip_label = tk.Label(self.tip, bg=self.BG_HEX, fg="#f0f0f0", justify="left")
+        self.tip_label = tk.Label(self.tip, justify="left")
         self.tip_label.pack()
 
         self.menu = tk.Menu(self.win, tearoff=0)
@@ -704,6 +757,7 @@ class Widget:
 
         self.x, self.y = self._initial_position()
         self.scale = self._scale_here()
+        self._apply_colors()
         self._layout()
         self._draw()
         if self.settings["visible"]:
@@ -736,7 +790,7 @@ class Widget:
         s = self.scale
         px, pad, gap = (round(v * s) for v in (self.GAUGE_PX, self.PAD_PX, self.GAP_PX))
         for i, key in enumerate(self.app.KEYS):   # session till vänster
-            self.labels[key].place(x=pad + i * (px + gap), y=pad, width=px, height=px)
+            self.labels[key].place(x=pad + i * (px + gap), y=pad, width=px, height=px, bordermode="outside")
         w, h = self._size(s)
         self.win.geometry(f"{w}x{h}+{self.x}+{self.y}")
         self.close_btn.configure(font=("Segoe UI", -round(self.CLOSE_FONT_PX * s)))   # negativt = pixlar
@@ -746,7 +800,9 @@ class Widget:
     def _place_close_button(self) -> None:
         s = self.scale
         size, inset = round(self.CLOSE_PX * s), round(s)
-        self.close_btn.place(x=self._size(s)[0] - size - inset, y=inset, width=size, height=size)
+        self.close_btn.place(
+            x=self._size(s)[0] - size - inset, y=inset, width=size, height=size, bordermode="outside",
+        )
         self.close_btn.lift()
 
     def _sync_close_button(self) -> None:
@@ -766,7 +822,7 @@ class Widget:
             self._place_close_button()
         else:
             self.close_btn.place_forget()
-            self.close_btn.configure(fg=self.CLOSE_FG)
+            self.close_btn.configure(fg=self.colors["close_fg"])
 
     def _set_scale(self, scale: float) -> None:
         self.scale = scale
@@ -779,19 +835,54 @@ class Widget:
         if scale != self.scale:
             self._set_scale(scale)
 
+    # ---- tema ----
+    def _apply_colors(self) -> None:
+        c = self.colors
+        bg = "#%02x%02x%02x" % c["bg"]
+        self.win.configure(bg=bg)
+        for label in self.labels.values():
+            label.configure(bg=bg)
+        self.close_btn.configure(bg=bg, fg=c["close_fg"])
+        self.tip.configure(bg=bg)
+        self.tip_label.configure(bg=bg, fg=c["tip_fg"])
+        self._apply_border()
+
+    def _apply_border(self) -> None:
+        """Windows 11 ritar kantlinjen längs de rundade hörnen. Äldre Windows får en rak
+        kantlinje från Tk. Mätarna placeras från ytterkanten (bordermode), så de flyttas inte."""
+        self.win.update_idletasks()
+        border = self.colors["border"]
+        if set_window_border(self.win, border) or border is None:
+            self.win.configure(highlightthickness=0)
+        else:
+            hex_border = "#%02x%02x%02x" % border
+            self.win.configure(highlightthickness=1, highlightbackground=hex_border, highlightcolor=hex_border)
+
+    def set_light(self, light: bool) -> None:
+        if light == self.light:
+            return
+        self.light = light
+        self.colors = self.PALETTES[light]
+        log(f"Widgetens tema: {'ljust' if light else 'mörkt'}")
+        self._apply_colors()
+        self._draw()
+
     def _draw(self) -> None:
         px = round(self.GAUGE_PX * self.scale)   # ritas i exakt storlek så att de blir skarpa
         for key, (pct, stale, _text) in self.state.items():
-            img = Image.new("RGBA", (px, px), self.BG + (255,))
-            img.alpha_composite(make_gauge(pct, stale=stale, size=px))
+            img = Image.new("RGBA", (px, px), self.colors["bg"] + (255,))
+            img.alpha_composite(make_gauge(pct, stale=stale, light=self.light, size=px))
             photo = ImageTk.PhotoImage(img.convert("RGB"), master=self.win)
             self.labels[key].configure(image=photo)
             self.images[key] = photo
 
-    def refresh(self, state: dict) -> None:
+    def refresh(self, state: dict, light: bool) -> None:
         self.state = state
         self._sync_scale()      # fångar också att skalningen ändrats i Windows
-        self._draw()
+        if light != self.light:
+            self.set_light(light)   # ritar om
+        else:
+            self._draw()
         if self.tip.state() == "normal":
             self._show_tip()
 
@@ -801,6 +892,7 @@ class Widget:
         self.win.update_idletasks()
         style_as_tool_window(self.win)
         round_window_corners(self.win)
+        self._apply_border()
 
     def set_visible(self, visible: bool) -> None:
         if visible:
@@ -874,7 +966,9 @@ class Widget:
                 self.menu.add_separator()
                 continue
             text, action, *checked = entry
-            if action is None:
+            if isinstance(action, list):
+                self.menu.add_cascade(label=text, menu=self._submenu(action))
+            elif action is None:
                 self.menu.add_command(label=text() if callable(text) else text, state="disabled")
             elif checked:
                 var = tk.BooleanVar(self.win, value=checked[0]())
@@ -889,6 +983,17 @@ class Widget:
         finally:
             self.menu.grab_release()
             self._sync_close_button()   # musen kan ha lämnat widgeten medan menyn var öppen
+
+    def _submenu(self, entries: list) -> tk.Menu:
+        """Undermeny där ett val är markerat, som Widgetens utseende. Byggs om varje gång menyn visas."""
+        if self.sub_menu is not None:
+            self.sub_menu.destroy()
+        self.sub_menu = tk.Menu(self.menu, tearoff=0)
+        var = tk.StringVar(self.win, value=next((text for text, _a, chosen in entries if chosen()), ""))
+        self.menu_vars.append(var)      # Tk kräver att variabeln lever kvar
+        for text, action, _chosen in entries:
+            self.sub_menu.add_radiobutton(label=text, value=text, variable=var, command=action)
+        return self.sub_menu
 
     def toggle_lock(self) -> None:
         self.settings["locked"] = not self.settings["locked"]
@@ -947,12 +1052,21 @@ class TrayIcon(pystray.Icon):
     ikon en egen post, och den gäller oavsett om appen körs med python eller pythonw.
     """
 
-    def __init__(self, *args, tray_uid: int, tray_guid: str, **kwargs):
+    def __init__(self, *args, tray_uid: int, tray_guid: str, on_theme_change=None, **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
         self._tray_added = False
+        self._on_theme_change = on_theme_change
         super().__init__(*args, **kwargs)
+        # Ikonens dolda fönster tar emot Windows rundsändningar. När temat ändras skickar
+        # Windows WM_SETTINGCHANGE med texten "ImmersiveColorSet". pystrays privata tabell.
+        self._message_handlers[WM_SETTINGCHANGE] = self._on_setting_change
+
+    def _on_setting_change(self, wparam, lparam):
+        if self._on_theme_change and lparam and ctypes.wstring_at(lparam) == "ImmersiveColorSet":
+            self._on_theme_change()
+        return 0
 
     def _on_notify(self, wparam, lparam):
         # Ersätter pystrays privata metod med samma namn. pystray bygger menyn i förväg, så den
@@ -1025,6 +1139,11 @@ class App:
             (t("menu_change_key"), self._change_key),
             *widget_entries,
             None,
+            (t("menu_theme"), [
+                (t(f"theme_{theme}"), lambda *_, th=theme: self._set_theme(th),
+                 lambda th=theme: self.settings["theme"] == th)
+                for theme in THEMES
+            ]),
             (t("menu_notifications"), self._toggle_notifications, lambda: bool(self.settings["notifications"])),
             (t("menu_autostart"), self._toggle_autostart, autostart_enabled),
             (t("menu_about"), self._show_about),
@@ -1043,7 +1162,12 @@ class App:
                 continue
             text, action, *checked = entry
             label = (lambda _, fn=text: fn()) if callable(text) else text
-            if action is None:
+            if isinstance(action, list):
+                items.append(pystray.MenuItem(label, pystray.Menu(*(
+                    pystray.MenuItem(sub, act, checked=lambda _, fn=chosen: fn(), radio=True)
+                    for sub, act, chosen in action
+                ))))
+            elif action is None:
                 items.append(pystray.MenuItem(label, None, enabled=False))
             elif checked:
                 items.append(pystray.MenuItem(label, action, checked=lambda _, fn=checked[0]: fn()))
@@ -1080,6 +1204,18 @@ class App:
             save_settings(self.settings)
             log(f"Användningsnotiser: {'på' if self.settings['notifications'] else 'av'}")
         self.ui_queue.put(toggle)
+
+    def _set_theme(self, theme: str):
+        # Inställningarna ändras och sparas bara i Tk-tråden
+        def apply():
+            self.settings["theme"] = theme
+            save_settings(self.settings)
+            log(f"Widgetens utseende: {theme}")
+            self._render()
+        self.ui_queue.put(apply)
+
+    def _widget_light(self) -> bool:
+        return is_light(self.settings["theme"], apps_are_light)
 
     def _toggle_autostart(self):
         # Utgår från registret, inte från bocken, som kan vara inaktuell
@@ -1175,6 +1311,8 @@ class App:
             menu=self._build_menu(),
             tray_uid=TRAY_IDS[key][0],
             tray_guid=tray_guid(key),
+            # Båda ikonerna får meddelandet, men en räcker för att rita om allt
+            on_theme_change=self._render if key == "session" else None,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
@@ -1268,6 +1406,8 @@ class App:
     def _render(self):
         if self.stop_evt.is_set():   # ikonerna kan redan vara stängda
             return
+        # Temat läses vid varje uppdatering, som reserv om ett temabyte inte märks direkt.
+        # Tray-ikonerna följer alltid aktivitetsfältet, oavsett valet för widgeten.
         light = taskbar_is_light()
         stale = self.error is not None
         for key, icon in self.icons.items():
@@ -1276,7 +1416,8 @@ class App:
             icon.title = self._tooltip_text(key)[:127]   # Windows max-längd på tooltip
         # Menyn byggs inte om här: TrayIcon._on_notify bygger den när den öppnas
         state = self._widget_state()
-        self.ui_queue.put(lambda: self.widget.refresh(state))
+        widget_light = self._widget_light()
+        self.ui_queue.put(lambda: self.widget.refresh(state, widget_light))
 
     def run(self):
         # Ctrl+C sätter bara en flagga. Ett KeyboardInterrupt inne i en Tk-callback

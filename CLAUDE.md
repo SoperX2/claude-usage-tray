@@ -11,8 +11,8 @@
   meddelandeloopen läser bara den trådens fönster). Därför en tråd per ikon i `App._icon_thread`.
 - `TrayIcon` ersätter pystrays privata `_message` för att sätta fast `uID` och GUID (`TRAY_IDS`), annars
   blir `uID` alltid 0 (pystray skickar felstavat `hID`). Windows sparar valet i "Andra ikoner i systemfältet"
-  per GUID. Ändra inte GUID:erna. pystray är låst till 0.19.x i requirements.txt: kontrollera `_message`
-  och `_on_notify` innan du höjer
+  per GUID. Ändra inte GUID:erna. pystray är låst till 0.19.x i requirements.txt: kontrollera `_message`,
+  `_on_notify` och `_message_handlers` (temabyte via WM_SETTINGCHANGE) innan du höjer
 - Windows knyter en GUID till utgivaren för signerade program (python.exe/pythonw.exe), annars till
   sökvägen. Den osignerade exe-filen får därför GUID:er härledda från sin sökväg (`tray_guid`). Med
   `TRAY_IDS` direkt nekas exe-filen ikonerna
