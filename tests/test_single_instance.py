@@ -119,7 +119,7 @@ class ShowRequestTests(unittest.TestCase):
         log.assert_called_once()
         task = a.ui_queue.put.call_args.args[0]
         task()                              # körs i Tk-tråden i appen
-        a.widget.set_visible.assert_called_once_with(True)
+        a.widget.set_visible.assert_called_once_with(True, "en ny kopia startades")
 
     def test_week_icon_does_not_listen(self):
         icon = app.TrayIcon("test", Image.new("RGBA", (16, 16)), tray_uid=2, tray_guid=str(uuid.uuid4()))

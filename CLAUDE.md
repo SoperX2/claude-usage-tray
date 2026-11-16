@@ -34,8 +34,12 @@
   ikonens WM_RBUTTONUP till sessionsikonens dolda fönster (`App.show_menu`), så pystray visar samma
   inbyggda meny i sin tråd. Använd inte `tk.Menu`: Tk ritar menyraderna själv och blir aldrig mörk.
   Ett högerklick innan sessionsikonen är klar köas (`menu_waiting`) och visas när `ready` sätts
-- Vänsterklick på en tray-ikon kör menyns standardval (`default=True`, visas i fetstil), som är
-  Dölj/Visa widget
+- Vänsterklick på en tray-ikon kör menyns standardval (`default=True`), som är "Visa widget": det visar
+  widgeten och lägger den överst, men döljer den aldrig. Döljning sker bara med ✕ eller "Dölj widget"
+  i menyn. pystray kör standardvalet även när raden är dold (`visible=False`), så "Visa widget" syns
+  (i fetstil) bara när widgeten är dold, och "Dölj widget" bara när den syns
+- `Widget.set_visible(visible, reason)` loggar alltid orsaken ("Widgeten döljs (✕ på widgeten)"), så att
+  en försvunnen widget kan spåras i loggen. Skicka alltid med en begriplig orsak
 - Widgeten håller sig överst med `SetWindowPos(HWND_TOPMOST)` när den visas, vid temabyte och skärmändring,
   och med en timer (`_topmost_tick`) som lyfter den om ett vanligt fönster hamnat ovanför eller flaggan
   tappats. Andra "alltid överst"-fönster och spel i exklusiv helskärm lämnas i fred. Använd alltid

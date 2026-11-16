@@ -924,6 +924,8 @@ class Widget:
         self._draw()
         if self.settings["visible"]:
             self.show()
+        else:
+            log("Widgeten är dold sedan förra körningen – vänsterklicka på en tray-ikon för att visa den")
         self.win.after(TOPMOST_CHECK_MS, self._topmost_tick)
 
     # ---- position & storlek ----
@@ -1094,9 +1096,11 @@ class Widget:
         except Exception as e:
             log(f"FEL när widgeten skulle läggas överst: {e!r}")
 
-    def set_visible(self, visible: bool) -> None:
+    def set_visible(self, visible: bool, reason: str) -> None:
+        """reason loggas, så att man i efterhand ser varför widgeten försvann eller kom tillbaka."""
+        log(f"Widgeten {'visas' if visible else 'döljs'} ({reason})")
         if visible:
-            self.show()
+            self.show()     # även när den redan syns: show lägger den överst igen
         else:
             self._tip_cancel()
             self.win.withdraw()
@@ -1104,13 +1108,10 @@ class Widget:
         self.settings["visible"] = visible
         save_settings(self.settings)
 
-    def toggle(self) -> None:
-        self.set_visible(not self.settings["visible"])
-
     def _close_clicked(self, event) -> str:
         # Släpps knappen utanför ✕ ångrar man sig, som på en vanlig knapp
         if 0 <= event.x < self.close_btn.winfo_width() and 0 <= event.y < self.close_btn.winfo_height():
-            self.set_visible(False)
+            self.set_visible(False, "✕ på widgeten")
         return "break"
 
     # ---- dra & klicka ----
@@ -1324,7 +1325,8 @@ class App:
             (t("menu_refresh"), self._refresh_now),
             (t("menu_open_usage"), self._open_usage_page),
             (t("menu_change_key"), self._change_key),
-            (self._widget_menu_text, self._toggle_widget),
+            (t("menu_show_widget"), self._show_widget),
+            (t("menu_hide_widget"), self._hide_widget),
             (t("menu_lock"), self._toggle_lock, lambda: bool(self.settings["locked"])),
             None,
             (t("menu_theme"), [
@@ -1338,9 +1340,6 @@ class App:
             None,
             (t("menu_quit"), self._quit),
         ]
-
-    def _widget_menu_text(self) -> str:
-        return t("menu_hide_widget") if self.settings["visible"] else t("menu_show_widget")
 
     def _build_menu(self) -> pystray.Menu:
         items = []
@@ -1359,9 +1358,15 @@ class App:
                 items.append(pystray.MenuItem(label, None, enabled=False))
             elif checked:
                 items.append(pystray.MenuItem(label, action, checked=lambda _, fn=checked[0]: fn()))
+            elif action == self._show_widget:
+                # Standardvalet körs vid vänsterklick på ikonen, även när raden är dold. Vänsterklick
+                # ska alltid visa widgeten, aldrig dölja den. Raden syns (i fetstil) bara när widgeten är dold.
+                items.append(pystray.MenuItem(label, action, default=True,
+                                              visible=lambda _: not self.settings["visible"]))
+            elif action == self._hide_widget:
+                items.append(pystray.MenuItem(label, action, visible=lambda _: self.settings["visible"]))
             else:
-                # Standardvalet körs vid vänsterklick på ikonen och visas i fetstil
-                items.append(pystray.MenuItem(label, action, default=action == self._toggle_widget))
+                items.append(pystray.MenuItem(label, action))
         return pystray.Menu(*items)
 
     def show_menu(self) -> None:
@@ -1394,7 +1399,7 @@ class App:
     def _show_requested(self):
         """En ny kopia startades och avslutade sig själv. Körs i ikonens tråd."""
         log("En ny kopia av appen startades – visar widgeten här i stället")
-        self.ui_queue.put(lambda: self.widget and self.widget.set_visible(True))
+        self.ui_queue.put(lambda: self.widget and self.widget.set_visible(True, "en ny kopia startades"))
 
     def _display_changed(self):
         self.ui_queue.put(lambda: self.widget and self.widget.keep_on_top())
@@ -1416,8 +1421,12 @@ class App:
     def _open_usage_page(self):
         webbrowser.open(USAGE_PAGE)
 
-    def _toggle_widget(self):
-        self.ui_queue.put(self.widget.toggle)
+    def _show_widget(self):
+        # pystray skiljer inte på vänsterklick och menyval, så båda står i loggen
+        self.ui_queue.put(lambda: self.widget.set_visible(True, "vänsterklick på ikonen eller Visa widget"))
+
+    def _hide_widget(self):
+        self.ui_queue.put(lambda: self.widget.set_visible(False, "Dölj widget i menyn"))
 
     def _toggle_lock(self):
         self.ui_queue.put(self.widget.toggle_lock)

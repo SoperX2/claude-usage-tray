@@ -29,16 +29,20 @@ def make_app(**settings) -> app.App:
 
 class SharedMenuTests(unittest.TestCase):
     def texts(self, a):
-        return [item.text for item in a._build_menu().items if item.text]
+        """Raderna som syns i menyn (pystray hoppar över rader med visible=False)."""
+        return [item.text for item in a._build_menu() if item.text]
 
     def test_one_menu_with_hide_widget_and_lock(self):
         texts = self.texts(make_app())
         self.assertIn("Dölj widget", texts)
+        self.assertNotIn("Visa widget", texts)
         self.assertIn("Lås position", texts)
         self.assertNotIn("Stäng widget", texts)
 
     def test_widget_line_follows_visibility(self):
-        self.assertIn("Visa widget", self.texts(make_app(visible=False)))
+        texts = self.texts(make_app(visible=False))
+        self.assertIn("Visa widget", texts)
+        self.assertNotIn("Dölj widget", texts)
 
     def test_lock_check_shows_current_value(self):
         a = make_app()
@@ -49,17 +53,78 @@ class SharedMenuTests(unittest.TestCase):
 
 
 class LeftClickTests(unittest.TestCase):
-    def test_hide_widget_is_the_default_item(self):
-        # pystray kör menyns standardval vid vänsterklick på ikonen
-        items = make_app()._build_menu().items
-        self.assertEqual([item.text for item in items if item.default], ["Dölj widget"])
-        self.assertIn("Uppdatera nu", [item.text for item in items])
+    def left_click(self, a):
+        """Samma anrop som pystray gör vid vänsterklick, sedan körs det som köades till Tk-tråden."""
+        a.widget = mock.Mock()
+        a._build_menu()(mock.Mock())
+        a.ui_queue.put.assert_called_once()
+        a.ui_queue.put.call_args.args[0]()
+        return a.widget
 
-    def test_left_click_toggles_the_widget(self):
+    def test_show_widget_is_the_default_item(self):
+        # pystray kör menyns standardval vid vänsterklick på ikonen
+        for visible in (True, False):
+            items = make_app(visible=visible)._build_menu().items
+            self.assertEqual([item.text for item in items if item.default], ["Visa widget"])
+
+    def test_bold_default_only_when_widget_is_hidden(self):
+        # Fetstilen visas bara på synliga rader. "Dölj widget" ska aldrig vara fetstilad.
+        self.assertEqual([i.text for i in make_app(visible=True)._build_menu() if i.default], [])
+        self.assertEqual([i.text for i in make_app(visible=False)._build_menu() if i.default], ["Visa widget"])
+
+    def test_left_click_shows_a_hidden_widget(self):
+        widget = self.left_click(make_app(visible=False))
+        widget.set_visible.assert_called_once_with(True, mock.ANY)
+
+    def test_left_click_never_hides_a_visible_widget(self):
+        widget = self.left_click(make_app(visible=True))
+        widget.set_visible.assert_called_once_with(True, mock.ANY)
+
+    def test_hide_widget_in_menu_hides_it(self):
         a = make_app()
         a.widget = mock.Mock()
-        a._build_menu()(mock.Mock())        # samma anrop som pystray gör vid vänsterklick
-        a.ui_queue.put.assert_called_once_with(a.widget.toggle)
+        hide = next(item for item in a._build_menu() if item.text == "Dölj widget")
+        hide(mock.Mock())
+        a.ui_queue.put.call_args.args[0]()
+        a.widget.set_visible.assert_called_once_with(False, "Dölj widget i menyn")
+
+
+class VisibilityLogTests(unittest.TestCase):
+    def make_widget(self, visible=True):
+        w = app.Widget.__new__(app.Widget)
+        w.settings = {"visible": visible}
+        w.win = mock.Mock()
+        w.show = mock.Mock()
+        w._tip_cancel = mock.Mock()
+        w._sync_close_button = mock.Mock()
+        self.addCleanup(mock.patch.stopall)
+        self.log = mock.patch.object(app, "log").start()
+        self.save = mock.patch.object(app, "save_settings").start()
+        return w
+
+    def test_hiding_logs_the_reason_and_saves(self):
+        w = self.make_widget()
+        w.set_visible(False, "✕ på widgeten")
+        w.win.withdraw.assert_called_once()
+        self.log.assert_called_once_with("Widgeten döljs (✕ på widgeten)")
+        self.assertFalse(w.settings["visible"])
+        self.save.assert_called_once()
+
+    def test_showing_logs_the_reason_and_raises(self):
+        w = self.make_widget(visible=False)
+        w.set_visible(True, "en ny kopia startades")
+        w.show.assert_called_once()         # show lägger widgeten överst
+        self.log.assert_called_once_with("Widgeten visas (en ny kopia startades)")
+        self.assertTrue(w.settings["visible"])
+
+    def test_close_button_hides_with_reason(self):
+        w = self.make_widget()
+        w.close_btn = mock.Mock()
+        w.close_btn.winfo_width.return_value = 10
+        w.close_btn.winfo_height.return_value = 10
+        w.set_visible = mock.Mock()
+        self.assertEqual(w._close_clicked(mock.Mock(x=5, y=5)), "break")
+        w.set_visible.assert_called_once_with(False, "✕ på widgeten")
 
 
 class ShowMenuTests(unittest.TestCase):
