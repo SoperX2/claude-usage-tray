@@ -22,6 +22,13 @@
   om tray-menyn från en annan tråd (`update_menu`): det kan förstöra en meny som visas. Bocken för
   "Starta med Windows" läses alltid från registret (`autostart_enabled`), aldrig från settings.json
 - Bara en dialog åt gången (`AppDialog.raise_open`), eftersom de är modala och tar grab
+- Nya dialoger ärver `AppDialog` och lägger knapparna i `add_buttons`, inte `buttonbox`: då får de
+  Windows apptema (`apply_window_theme`) innan de visas. Andra fönster anropar `apply_window_theme` själva.
+  `_darken` färgar bara Frame, Label, Entry och Button: lägg till fler typer (Checkbutton, Radiobutton,
+  Text, Scrollbar …) i den när en dialog börjar använda dem, annars blir de ljusa i mörkt läge
+- Menyerna blir mörka via uxtheme (`enable_dark_menus`). Widgeten har ingen egen meny: högerklick postar
+  ikonens WM_RBUTTONUP till sessionsikonens dolda fönster (`App.show_menu`), så pystray visar samma
+  inbyggda meny i sin tråd. Använd inte `tk.Menu`: Tk ritar menyraderna själv och blir aldrig mörk
 - Widgetens ✕ visas vid hovring, även när positionen är låst
 - Huvudtråden kör Tk:s `mainloop`. All Tk-kod måste köras där: andra trådar lägger en funktion i
   `App.ui_queue`, och `App._pump` läser kön var 100:e ms med `root.after`

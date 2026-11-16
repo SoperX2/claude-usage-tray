@@ -102,6 +102,17 @@ class AppDialog(simpledialog.Dialog):
         finally:
             AppDialog.current = None
 
+    def buttonbox(self):
+        # simpledialog anropar den här efter body() och innan fönstret visas, så temat
+        # (även titelraden) är på plats redan när dialogen syns
+        box = tk.Frame(self)
+        self.add_buttons(box)
+        box.pack()
+        apply_window_theme(self)
+
+    def add_buttons(self, box: tk.Frame) -> None:
+        raise NotImplementedError
+
     @staticmethod
     def raise_open() -> bool:
         """Lägger en redan öppen dialog överst. Sant om det fanns en, och då ska ingen ny visas."""
@@ -126,13 +137,11 @@ class SessionKeyDialog(AppDialog):
         self.after(50, self.entry.focus_force)
         return self.entry
 
-    def buttonbox(self):
-        box = tk.Frame(self)
+    def add_buttons(self, box: tk.Frame) -> None:
         tk.Button(box, text=t("ok"), width=10, command=self.ok, default="active").pack(side="left", padx=5, pady=5)
         tk.Button(box, text=t("cancel"), width=10, command=self.cancel).pack(side="left", padx=5, pady=5)
         self.bind("<Return>", self.ok)
         self.bind("<Escape>", self.cancel)
-        box.pack()
 
     def apply(self):
         self.result = self.entry.get().strip() or None
@@ -149,15 +158,13 @@ class AboutDialog(AppDialog):
         tk.Label(master, text=t("about_disclaimer"), justify="left").pack(anchor="w", pady=(8, 0))
         return None
 
-    def buttonbox(self):
-        box = tk.Frame(self)
+    def add_buttons(self, box: tk.Frame) -> None:
         tk.Button(box, text=t("about_github"), command=lambda: webbrowser.open(REPO_URL)).pack(
             side="left", padx=5, pady=5)
         tk.Button(box, text=t("close"), width=10, command=self.cancel, default="active").pack(
             side="left", padx=5, pady=5)
         self.bind("<Return>", self.cancel)
         self.bind("<Escape>", self.cancel)
-        box.pack()
 
 
 # --------------------------------------------------------------------------- #
@@ -268,6 +275,8 @@ MONITOR_DEFAULTTONEAREST = 2
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20            # Windows 10 20H1 och senare
+DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19        # Windows 10 1903–1909
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWA_BORDER_COLOR = 34
 DWMWA_COLOR_DEFAULT = 0xFFFFFFFF
@@ -300,6 +309,108 @@ shcore.GetDpiForMonitor.argtypes = (
 shcore.GetDpiForMonitor.restype = ctypes.c_long
 dwmapi.DwmSetWindowAttribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
 dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+
+
+# Mörka menyer: odokumenterade funktioner i uxtheme.dll, som Utforskaren använder. Finns från
+# Windows 10 1903. De har inga namn, bara nummer (ordinal).
+DARK_MENUS_MIN_BUILD = 18362
+UXTHEME_SET_PREFERRED_APP_MODE = 135
+UXTHEME_FLUSH_MENU_THEMES = 136
+APP_MODE_ALLOW_DARK = 1         # menyerna följer Windows apptema (AppsUseLightTheme)
+_flush_menu_themes = None
+
+
+def enable_dark_menus() -> None:
+    """Gör högerklicksmenyerna mörka när Windows apptema är mörkt. Gäller hela processen, och
+    därför följer menyerna Windows, inte valet för widgeten. Måste anropas innan menyer skapas.
+    Misslyckas det förblir menyerna ljusa, och appen fungerar som vanligt."""
+    global _flush_menu_themes
+    try:
+        build = sys.getwindowsversion().build
+        if build < DARK_MENUS_MIN_BUILD:
+            log(f"Mörka menyer kräver Windows 10 1903 eller senare (build {build})")
+            return
+        uxtheme = ctypes.WinDLL("uxtheme")
+        set_preferred_app_mode = uxtheme[UXTHEME_SET_PREFERRED_APP_MODE]
+        set_preferred_app_mode.argtypes = (ctypes.c_int,)
+        set_preferred_app_mode.restype = ctypes.c_int
+        flush = uxtheme[UXTHEME_FLUSH_MENU_THEMES]
+        flush.argtypes = ()
+        flush.restype = None
+        set_preferred_app_mode(APP_MODE_ALLOW_DARK)
+        flush()
+        _flush_menu_themes = flush
+    except Exception as e:
+        log(f"Kunde inte slå på mörka menyer, de förblir ljusa: {e!r}")
+
+
+def flush_menu_themes() -> None:
+    """Läser om menyernas tema efter ett temabyte i Windows."""
+    if _flush_menu_themes is None:
+        return
+    try:
+        _flush_menu_themes()
+    except Exception as e:
+        log(f"Kunde inte uppdatera menyernas tema: {e!r}")
+
+
+# Färger för appens fönster (dialogerna) i mörkt läge. I ljust läge används Tk:s standardfärger.
+DARK_WINDOW = {
+    "bg": "#202020",
+    "fg": "#ffffff",
+    "field": "#2d2d2d",         # inmatningsfält
+    "button": "#333333",
+    "button_active": "#3d3d3d",
+    "edge": "#555555",          # tunn kant runt fält och knappar
+    "focus": "#8a8a8a",
+}
+
+
+def set_dark_title_bar(win: tk.Misc, dark: bool) -> None:
+    """Mörk eller ljus titelrad. Äldre Windows 10 har attributet under ett annat nummer,
+    och på ännu äldre Windows gör det ingenting."""
+    hwnd = int(win.wm_frame(), 16)
+    value = ctypes.c_int(1 if dark else 0)
+    for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
+        if dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+            return
+
+
+def apply_window_theme(win: tk.Toplevel) -> None:
+    """Ger ett fönster Windows apptema: mörk titelrad och mörka färger när apparna är mörka,
+    annars som förut. För alla appens dialoger, även kommande. Anropas innan fönstret visas,
+    när alla widgetar har skapats. Ett fel här får aldrig stoppa dialogen."""
+    try:
+        dark = not apps_are_light()
+        win.update_idletasks()      # fönstret måste finnas för titelraden
+        set_dark_title_bar(win, dark)
+        if dark:
+            _darken(win)
+    except Exception as e:
+        log(f"Kunde inte ge fönstret Windows tema: {e!r}")
+
+
+def _darken(widget: tk.Misc) -> None:
+    c = DARK_WINDOW
+    kind = widget.winfo_class()
+    if kind in ("Toplevel", "Frame"):
+        widget.configure(bg=c["bg"])
+    elif kind == "Label":
+        widget.configure(bg=c["bg"], fg=c["fg"])
+    elif kind == "Entry":
+        widget.configure(
+            bg=c["field"], fg=c["fg"], insertbackground=c["fg"], relief="flat", bd=4,
+            highlightthickness=1, highlightbackground=c["edge"], highlightcolor=c["focus"],
+            selectbackground="#264f78", selectforeground=c["fg"],
+        )
+    elif kind == "Button":
+        widget.configure(
+            bg=c["button"], fg=c["fg"], activebackground=c["button_active"], activeforeground=c["fg"],
+            relief="flat", bd=0, highlightthickness=1, highlightbackground=c["edge"], highlightcolor=c["focus"],
+            padx=8, pady=4,
+        )
+    for child in widget.winfo_children():
+        _darken(child)
 
 
 def set_dpi_awareness() -> None:
@@ -379,7 +490,6 @@ TEXTS = {
         "menu_refresh": "Refresh now",
         "menu_open_usage": "Open usage in browser",
         "menu_change_key": "Change sessionKey…",
-        "menu_close_widget": "Close widget",
         "menu_show_widget": "Show widget",
         "menu_hide_widget": "Hide widget",
         "menu_lock": "Lock position",
@@ -420,7 +530,6 @@ TEXTS = {
         "menu_refresh": "Uppdatera nu",
         "menu_open_usage": "Öppna användning i webbläsaren",
         "menu_change_key": "Byt sessionKey…",
-        "menu_close_widget": "Stäng widget",
         "menu_show_widget": "Visa widget",
         "menu_hide_widget": "Dölj widget",
         "menu_lock": "Lås position",
@@ -709,7 +818,6 @@ class Widget:
         self.dragging = False
         self.tip_key: str | None = None
         self.tip_job: str | None = None
-        self.sub_menu: tk.Menu | None = None
         self.light = app._widget_light()
         self.colors = self.PALETTES[self.light]
 
@@ -741,7 +849,8 @@ class Widget:
         self.win.bind("<Double-Button-1>", self._double_click)
         self.win.bind("<B1-Motion>", self._motion)
         self.win.bind("<ButtonRelease-1>", self._release)
-        self.win.bind("<Button-3>", self._show_menu)
+        # Vid släppet, så att knappen inte väljer en rad i menyn som just öppnats
+        self.win.bind("<ButtonRelease-3>", self._show_menu)
         self.win.bind("<Enter>", lambda _e: self._sync_close_button())
         self.win.bind("<Leave>", lambda _e: self._sync_close_button())
 
@@ -751,9 +860,6 @@ class Widget:
         self.tip.attributes("-topmost", True)
         self.tip_label = tk.Label(self.tip, justify="left")
         self.tip_label.pack()
-
-        self.menu = tk.Menu(self.win, tearoff=0)
-        self.menu_vars: list[tk.BooleanVar] = []
 
         self.x, self.y = self._initial_position()
         self.scale = self._scale_here()
@@ -959,41 +1065,7 @@ class Widget:
     # ---- högerklicksmeny ----
     def _show_menu(self, _event) -> None:
         self._tip_cancel()
-        self.menu.delete(0, "end")
-        self.menu_vars = []
-        for entry in self.app._menu_entries(for_widget=True):
-            if entry is None:
-                self.menu.add_separator()
-                continue
-            text, action, *checked = entry
-            if isinstance(action, list):
-                self.menu.add_cascade(label=text, menu=self._submenu(action))
-            elif action is None:
-                self.menu.add_command(label=text() if callable(text) else text, state="disabled")
-            elif checked:
-                var = tk.BooleanVar(self.win, value=checked[0]())
-                self.menu_vars.append(var)      # Tk kräver att variabeln lever kvar
-                self.menu.add_checkbutton(label=text, variable=var, command=action)
-            else:
-                self.menu.add_command(label=text, command=action)
-        self.win.focus_force()  # annars stängs inte menyn av ett klick utanför
-        cx, cy = cursor_pos()
-        try:
-            self.menu.tk_popup(cx, cy)
-        finally:
-            self.menu.grab_release()
-            self._sync_close_button()   # musen kan ha lämnat widgeten medan menyn var öppen
-
-    def _submenu(self, entries: list) -> tk.Menu:
-        """Undermeny där ett val är markerat, som Widgetens utseende. Byggs om varje gång menyn visas."""
-        if self.sub_menu is not None:
-            self.sub_menu.destroy()
-        self.sub_menu = tk.Menu(self.menu, tearoff=0)
-        var = tk.StringVar(self.win, value=next((text for text, _a, chosen in entries if chosen()), ""))
-        self.menu_vars.append(var)      # Tk kräver att variabeln lever kvar
-        for text, action, _chosen in entries:
-            self.sub_menu.add_radiobutton(label=text, value=text, variable=var, command=action)
-        return self.sub_menu
+        self.app.show_menu()
 
     def toggle_lock(self) -> None:
         self.settings["locked"] = not self.settings["locked"]
@@ -1052,12 +1124,15 @@ class TrayIcon(pystray.Icon):
     ikon en egen post, och den gäller oavsett om appen körs med python eller pythonw.
     """
 
-    def __init__(self, *args, tray_uid: int, tray_guid: str, on_theme_change=None, **kwargs):
+    def __init__(self, *args, tray_uid: int, tray_guid: str, on_theme_change=None, on_menu_closed=None,
+                 **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
         self._tray_added = False
         self._on_theme_change = on_theme_change
+        self._on_menu_closed = on_menu_closed
+        self._menu_open = False
         super().__init__(*args, **kwargs)
         # Ikonens dolda fönster tar emot Windows rundsändningar. När temat ändras skickar
         # Windows WM_SETTINGCHANGE med texten "ImmersiveColorSet". pystrays privata tabell.
@@ -1073,9 +1148,21 @@ class TrayIcon(pystray.Icon):
         # byggs om här precis innan den visas, med aktuella procent, status och bock för
         # "Starta med Windows" (läst från registret). Menyn byggs bara om i ikonens egen tråd,
         # aldrig från andra trådar, som annars kunde förstöra den medan den visas.
-        if lparam == pystray_win32.WM_RBUTTONUP:
+        if lparam != pystray_win32.WM_RBUTTONUP:
+            super()._on_notify(wparam, lparam)
+            return
+        # Menyns modala loop tar emot nya meddelanden medan menyn visas, till exempel ett
+        # högerklick på widgeten. Då får menyn inte byggas om eller öppnas en gång till.
+        if self._menu_open:
+            return
+        self._menu_open = True
+        try:
             self.update_menu()
-        super()._on_notify(wparam, lparam)
+            super()._on_notify(wparam, lparam)
+        finally:
+            self._menu_open = False
+            if self._on_menu_closed:
+                self._on_menu_closed()
 
     def _message(self, code, flags, **kwargs):
         # Ersätter pystrays privata metod med samma namn.
@@ -1120,15 +1207,9 @@ class App:
         self.wake_evt = threading.Event()
 
     # ---- meny (delas av båda ikonerna och widgeten) ----
-    def _menu_entries(self, for_widget: bool = False) -> list:
+    def _menu_entries(self) -> list:
         """Menyraderna i ordning: (text, åtgärd) eller (text, åtgärd, bockad?), None = avdelare.
         Utan åtgärd = bara text. Text och bock kan vara funktioner, som läses när menyn byggs."""
-        widget_entries = [
-            (t("menu_close_widget"), self._hide_widget),
-            (t("menu_lock"), self._toggle_lock, lambda: bool(self.settings["locked"])),
-        ] if for_widget else [
-            (self._widget_menu_text, self._toggle_widget),
-        ]
         return [
             (lambda: fmt_line(self.LABELS["session"], self.data["session"]), None),
             (lambda: fmt_line(self.LABELS["week"], self.data["week"]), None),
@@ -1137,7 +1218,8 @@ class App:
             (t("menu_refresh"), self._refresh_now),
             (t("menu_open_usage"), self._open_usage_page),
             (t("menu_change_key"), self._change_key),
-            *widget_entries,
+            (self._widget_menu_text, self._toggle_widget),
+            (t("menu_lock"), self._toggle_lock, lambda: bool(self.settings["locked"])),
             None,
             (t("menu_theme"), [
                 (t(f"theme_{theme}"), lambda *_, th=theme: self._set_theme(th),
@@ -1175,6 +1257,19 @@ class App:
                 items.append(pystray.MenuItem(label, action, default=action == self._refresh_now))
         return pystray.Menu(*items)
 
+    def show_menu(self) -> None:
+        """Visar tray-menyn vid pekaren, för widgetens högerklick. Det är en riktig Windows-meny
+        som följer mörkt läge, vilket Tk:s meny inte gör. Meddelandet är samma som Windows
+        skickar vid högerklick på ikonen, så pystray bygger och visar menyn i ikonens egen tråd."""
+        icon = self.icons.get("session")
+        if icon is None or not icon._hwnd:
+            return      # ikonen har inte startat än
+        pystray_win32.PostMessage(icon._hwnd, pystray_win32.WM_NOTIFY, 0, pystray_win32.WM_RBUTTONUP)
+
+    def _menu_closed(self):
+        # Pekaren kan ha lämnat widgeten medan menyn var öppen, utan att Tk märkte det
+        self.ui_queue.put(lambda: self.widget and self.widget._sync_close_button())
+
     def _status_line(self) -> str:
         if self.error:
             return f"⚠ {self.error}"
@@ -1190,9 +1285,6 @@ class App:
 
     def _toggle_widget(self):
         self.ui_queue.put(self.widget.toggle)
-
-    def _hide_widget(self):
-        self.ui_queue.put(lambda: self.widget.set_visible(False))
 
     def _toggle_lock(self):
         self.ui_queue.put(self.widget.toggle_lock)
@@ -1236,8 +1328,8 @@ class App:
             AboutDialog(self.root, title=t("menu_about"))
 
     def _change_key(self):
-        # Egen tråd eftersom svaret väntas in. Från widgetens meny körs vi i Tk-tråden,
-        # och en väntan där skulle låsa dialogen som vi väntar på.
+        # Egen tråd eftersom svaret väntas in. Menyvalen körs i ikonens tråd, där en väntan
+        # skulle låsa ikonens meddelandeloop, och i Tk-tråden skulle den låsa dialogen.
         threading.Thread(target=self._change_key_worker, daemon=True).start()
 
     def _change_key_worker(self):
@@ -1312,7 +1404,8 @@ class App:
             tray_uid=TRAY_IDS[key][0],
             tray_guid=tray_guid(key),
             # Båda ikonerna får meddelandet, men en räcker för att rita om allt
-            on_theme_change=self._render if key == "session" else None,
+            on_theme_change=self._theme_changed if key == "session" else None,
+            on_menu_closed=self._menu_closed,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
@@ -1403,6 +1496,11 @@ class App:
             for key in self.KEYS
         }
 
+    def _theme_changed(self):
+        """Windows tema har ändrats. Körs i ikonens tråd."""
+        flush_menu_themes()
+        self._render()
+
     def _render(self):
         if self.stop_evt.is_set():   # ikonerna kan redan vara stängda
             return
@@ -1453,6 +1551,7 @@ class App:
 
 def main():
     set_dpi_awareness()
+    enable_dark_menus()     # före alla menyer
     App().run()
 
 

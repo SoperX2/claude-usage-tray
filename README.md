@@ -80,11 +80,12 @@ A small borderless window with the same two gauges, always on top. It does not s
 
 - **Drag** with the left mouse button to move it, also between monitors. The gauges are redrawn at the right size on monitors with different scaling
 - **Double-click** to refresh
-- **Right-click** for the same menu as the tray icons, plus **Lock position**
+- **Right-click** for the same menu as the tray icons
 - **Hover** over a gauge for details
-- **Close** it with the small ✕ that appears in the corner when you hover over the widget, or with **Close widget** in its menu. The app keeps running in the tray
+- **Close** it with the small ✕ that appears in the corner when you hover over the widget, or with **Hide widget** in the menu. The app keeps running in the tray
 - **Bring it back** with **Show widget** in the tray menu
-- **Quit Claude Usage** in either menu exits the whole app
+- **Lock position** in the menu stops the widget from being dragged
+- **Quit Claude Usage** in the menu exits the whole app
 
 The widget has a dark background with light gauges, or in the light theme a near-white background with dark gauges and a thin grey border. Either way it looks the same on light and dark wallpapers. Corners are rounded on Windows 11 and square on older versions.
 
