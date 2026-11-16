@@ -65,6 +65,9 @@
 ## Release
 - Taggen `vX.Y.Z` måste stämma med `__version__`, annars stoppar release.yml. Testa exe-bygget lokalt i
   `.venv` med requirements-build.txt
+- release.yml skapar alltid releasen som pre-release (`--prerelease --latest=false`), så att
+  releases/latest pekar på den förra releasen. Kontrollera VirusTotal (särskilt Microsoft) och gör den
+  sedan till Latest för hand: `gh release edit vX.Y.Z --prerelease=false --latest`
 - build.yml bygger PyInstallers bootloader från källkod (`PYINSTALLER_COMPILE_BOOTLOADER=1`,
   `--no-binary pyinstaller`) för färre falsklarm från antivirus, och `scripts/check_bootloader.py` stoppar
   bygget om den förbyggda från PyPI ändå hamnade i exe-filen. Ta inte bort någon av dem. Behåll `--onefile`

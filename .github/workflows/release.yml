@@ -72,7 +72,10 @@ jobs:
           name: ClaudeUsage
           path: dist
 
-      # Hashen räknas på exakt den fil som laddas upp, i samma steg, direkt före uppladdningen
+      # Hashen räknas på exakt den fil som laddas upp, i samma steg, direkt före uppladdningen.
+      # Releasen skapas alltid som pre-release och blir inte Latest, så att releases/latest (README:s
+      # nedladdningslänk) pekar på den förra releasen tills någon har sett VirusTotal-resultatet och
+      # gjort den nya till Latest för hand.
       - name: Hash the exe and create the release
         shell: pwsh
         run: |
@@ -81,7 +84,8 @@ jobs:
           [IO.File]::WriteAllText("dist/ClaudeUsage.exe.sha256", "$hash  ClaudeUsage.exe`n")
           Write-Output "SHA256 of ClaudeUsage.exe: $hash"
           gh release create $env:TAG dist/ClaudeUsage.exe dist/ClaudeUsage.exe.sha256 `
-            --title "Claude Usage $env:TAG" --notes "SHA256 of ClaudeUsage.exe: ``$hash``" --generate-notes --verify-tag
+            --title "Claude Usage $env:TAG" --notes "SHA256 of ClaudeUsage.exe: ``$hash``" --generate-notes --verify-tag `
+            --prerelease --latest=false
           if ($LASTEXITCODE -ne 0) { Write-Error "gh release create failed"; exit 1 }
 
       - name: Verify the published release
