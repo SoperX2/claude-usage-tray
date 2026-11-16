@@ -67,7 +67,7 @@ Do not turn off real-time protection or add exclusions to get around it. Reporti
 - **Two tray gauges:** the left one shows the current session (the 5-hour window) and the right one shows the week
 - **Colours:** white, or black on a light taskbar. Orange at 80 % or more, red at 95 % or more, dimmed when the data is stale or failed to load
 - **Light or dark:** the tray icons always follow the colour of the taskbar, so they stay visible. For the widget, choose **Widget appearance** in the menu: **Follow Windows** (the default), **Light** or **Dark**. **Follow Windows** uses the colour of your apps, which can differ from the taskbar's in Windows (**Settings** → **Personalization** → **Colors**). The app switches as soon as you change the theme in Windows
-- **Hover** for the exact percentage and when the limit resets. **Left-click** to refresh, **right-click** for the menu
+- **Hover** for the exact percentage and when the limit resets. **Left-click** to show or hide the widget, **right-click** for the menu
 - **Windows notification** when the session or the week passes 95 % and 99 %, for example "Session: 95% used, resets 22:00". Each one is shown at most once per period, even if the app restarts. Turn them off with **Notifications** in the menu. Error notifications, for example when your login has expired, are always shown
 - **Refreshes automatically** every two minutes
 - **Floating widget** that stays on top, with the same two gauges (see below)
@@ -76,14 +76,14 @@ Do not turn off real-time protection or add exclusions to get around it. Reporti
 
 ### Floating widget
 
-A small borderless window with the same two gauges, always on top. It does not show up in the taskbar or in Alt+Tab.
+A small borderless window with the same two gauges, always on top, also over maximized and full-screen windows such as Chrome in full screen (F11). Games in exclusive full screen are left alone. It does not show up in the taskbar or in Alt+Tab.
 
 - **Drag** with the left mouse button to move it, also between monitors. The gauges are redrawn at the right size on monitors with different scaling
 - **Double-click** to refresh
 - **Right-click** for the same menu as the tray icons
 - **Hover** over a gauge for details
 - **Close** it with the small ✕ that appears in the corner when you hover over the widget, or with **Hide widget** in the menu. The app keeps running in the tray
-- **Bring it back** with **Show widget** in the tray menu
+- **Bring it back** by left-clicking a tray icon, or with **Show widget** in the menu. If it was on a monitor that is no longer connected, it comes back in the bottom-right corner of the main monitor
 - **Lock position** in the menu stops the widget from being dragged
 - **Quit Claude Usage** in the menu exits the whole app
 

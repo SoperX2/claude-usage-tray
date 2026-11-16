@@ -28,7 +28,14 @@
   Text, Scrollbar …) i den när en dialog börjar använda dem, annars blir de ljusa i mörkt läge
 - Menyerna blir mörka via uxtheme (`enable_dark_menus`). Widgeten har ingen egen meny: högerklick postar
   ikonens WM_RBUTTONUP till sessionsikonens dolda fönster (`App.show_menu`), så pystray visar samma
-  inbyggda meny i sin tråd. Använd inte `tk.Menu`: Tk ritar menyraderna själv och blir aldrig mörk
+  inbyggda meny i sin tråd. Använd inte `tk.Menu`: Tk ritar menyraderna själv och blir aldrig mörk.
+  Ett högerklick innan sessionsikonen är klar köas (`menu_waiting`) och visas när `ready` sätts
+- Vänsterklick på en tray-ikon kör menyns standardval (`default=True`, visas i fetstil), som är
+  Dölj/Visa widget
+- Widgeten håller sig överst med `SetWindowPos(HWND_TOPMOST)` när den visas, vid temabyte och skärmändring,
+  och med en timer (`_topmost_tick`) som lyfter den om ett vanligt fönster hamnat ovanför eller flaggan
+  tappats. Andra "alltid överst"-fönster och spel i exklusiv helskärm lämnas i fred. Använd alltid
+  SWP_NOACTIVATE: widgeten får aldrig ta fokus
 - Widgetens ✕ visas vid hovring, även när positionen är låst
 - Huvudtråden kör Tk:s `mainloop`. All Tk-kod måste köras där: andra trådar lägger en funktion i
   `App.ui_queue`, och `App._pump` läser kön var 100:e ms med `root.after`

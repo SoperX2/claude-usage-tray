@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,6 +20,10 @@ def make_app(**settings) -> app.App:
     a.updated = None
     a.ui_queue = mock.Mock()
     a.icons = {}
+    a.ready = {k: threading.Event() for k in app.App.KEYS}
+    a.ready["session"].set()
+    a.menu_waiting = False
+    a.stop_evt = threading.Event()
     return a
 
 
@@ -43,6 +48,20 @@ class SharedMenuTests(unittest.TestCase):
         self.assertTrue(lock.checked)       # läses när menyn visas, inte när den byggs
 
 
+class LeftClickTests(unittest.TestCase):
+    def test_hide_widget_is_the_default_item(self):
+        # pystray kör menyns standardval vid vänsterklick på ikonen
+        items = make_app()._build_menu().items
+        self.assertEqual([item.text for item in items if item.default], ["Dölj widget"])
+        self.assertIn("Uppdatera nu", [item.text for item in items])
+
+    def test_left_click_toggles_the_widget(self):
+        a = make_app()
+        a.widget = mock.Mock()
+        a._build_menu()(mock.Mock())        # samma anrop som pystray gör vid vänsterklick
+        a.ui_queue.put.assert_called_once_with(a.widget.toggle)
+
+
 class ShowMenuTests(unittest.TestCase):
     def test_posts_right_click_to_session_icon(self):
         a = make_app()
@@ -51,13 +70,28 @@ class ShowMenuTests(unittest.TestCase):
             a.show_menu()
         post.assert_called_once_with(1234, app.pystray_win32.WM_NOTIFY, 0, app.pystray_win32.WM_RBUTTONUP)
 
-    def test_does_nothing_before_icon_has_started(self):
+    def test_early_click_waits_for_the_icon(self):
         a = make_app()
-        with mock.patch.object(app.pystray_win32, "PostMessage") as post:
+        a.ready["session"].clear()
+        posted = threading.Event()
+        with mock.patch.object(app.pystray_win32, "PostMessage", side_effect=lambda *_: posted.set()) as post, \
+                mock.patch.object(app, "log") as log:
             a.show_menu()
-            a.icons = {"session": mock.Mock(_hwnd=None)}
+            a.show_menu()       # ett andra tidigt klick köas inte en gång till
+            self.assertFalse(posted.wait(0.2))
+            a.icons = {"session": mock.Mock(_hwnd=1234)}
+            a.ready["session"].set()
+            self.assertTrue(posted.wait(2))
+        post.assert_called_once()
+        self.assertIn("innan menyn var klar", log.call_args_list[0].args[0])
+
+    def test_icon_without_window_is_logged(self):
+        a = make_app()
+        a.icons = {"session": mock.Mock(_hwnd=None)}
+        with mock.patch.object(app.pystray_win32, "PostMessage") as post, mock.patch.object(app, "log") as log:
             a.show_menu()
         post.assert_not_called()
+        log.assert_called_once()
 
 
 class OpenMenuGuardTests(unittest.TestCase):
@@ -65,6 +99,8 @@ class OpenMenuGuardTests(unittest.TestCase):
 
     def make_icon(self):
         icon = app.TrayIcon.__new__(app.TrayIcon)     # utan fönster och ikon i Windows
+        icon._running = False       # för pystrays __del__
+        icon._icon_handle = None
         icon._menu_open = False
         icon._on_menu_closed = mock.Mock()
         icon.update_menu = mock.Mock()

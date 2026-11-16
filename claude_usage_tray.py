@@ -3,7 +3,7 @@ Claude Usage Tray
 Visar din Claude-användning (session + vecka) som en ikon i Windows systemfält.
 
 Två mätar-ikoner: vänster = session (5 h), höger = vecka.
-Hovra för detaljer, vänsterklicka för att uppdatera, högerklicka för meny.
+Hovra för detaljer, vänsterklicka för att visa/dölja widgeten, högerklicka för meny.
 
 Samma två mätare visas även i en flytande widget som alltid ligger överst.
 Dra för att flytta, dubbelklicka för att uppdatera, högerklicka för meny.
@@ -46,6 +46,8 @@ USAGE_PAGE = "https://claude.ai/settings/usage"
 POLL_SECONDS = 120          # hur ofta vi hämtar ny data
 NOTIFY_THRESHOLDS = (95, 99)  # notis när session eller vecka passerar dessa %
 PUMP_MS = 100               # hur ofta Tk läser kön från de andra trådarna
+TOPMOST_CHECK_MS = 2000     # hur ofta widgeten kontrollerar att den fortfarande ligger överst
+MENU_WAIT_SECONDS = 10      # hur länge ett tidigt högerklick väntar på att sessionsikonen startar
 SETTINGS_PATH = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME / "settings.json"
 
 # Fasta id:n som Windows kommer ihåg ikonerna med. Ändras de nollställs användarens val
@@ -268,6 +270,7 @@ def set_autostart(enabled: bool) -> None:
 user32 = ctypes.WinDLL("user32")
 shcore = ctypes.WinDLL("shcore")
 dwmapi = ctypes.WinDLL("dwmapi")
+shell32 = ctypes.WinDLL("shell32")
 
 MONITOR_DEFAULTTONULL = 0
 MONITOR_DEFAULTTOPRIMARY = 1
@@ -275,6 +278,13 @@ MONITOR_DEFAULTTONEAREST = 2
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_APPWINDOW = 0x00040000
+WS_EX_TOPMOST = 0x00000008
+HWND_TOPMOST = -1
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+GW_HWNDPREV = 3
+QUNS_RUNNING_D3D_FULL_SCREEN = 3    # spel eller annat i exklusiv helskärm
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20            # Windows 10 20H1 och senare
 DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19        # Windows 10 1903–1909
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
@@ -301,6 +311,17 @@ user32.GetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int)
 user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t)
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.SetWindowPos.argtypes = (
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT,
+)
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.GetWindow.argtypes = (wintypes.HWND, wintypes.UINT)
+user32.GetWindow.restype = wintypes.HWND
+user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+user32.IsWindowVisible.restype = wintypes.BOOL
+user32.GetClassNameW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+shell32.SHQueryUserNotificationState.argtypes = (ctypes.POINTER(ctypes.c_int),)
+shell32.SHQueryUserNotificationState.restype = ctypes.c_long
 shcore.SetProcessDpiAwareness.argtypes = (ctypes.c_int,)
 shcore.SetProcessDpiAwareness.restype = ctypes.c_long
 shcore.GetDpiForMonitor.argtypes = (
@@ -450,6 +471,40 @@ def style_as_tool_window(win: tk.Misc) -> None:
     hwnd = int(win.wm_frame(), 16)
     ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
     user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+
+
+def set_topmost(hwnd: int) -> None:
+    """Lägger fönstret överst bland "alltid överst"-fönstren. SWP_NOACTIVATE: tar aldrig fokus."""
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+
+def covering_window(hwnd: int) -> int | None:
+    """Ett vanligt fönster som har hamnat ovanför ett "alltid överst"-fönster, eller fönstret
+    självt om det har tappat sin överst-flagga. None om allt är som det ska.
+    Andra "alltid överst"-fönster ovanför (menyer, tooltips, bild-i-bild) är Windows normala
+    ordning och räknas inte."""
+    if not user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST:
+        return hwnd
+    above = user32.GetWindow(hwnd, GW_HWNDPREV)
+    while above:
+        if user32.IsWindowVisible(above) and not user32.GetWindowLongPtrW(above, GWL_EXSTYLE) & WS_EX_TOPMOST:
+            return above
+        above = user32.GetWindow(above, GW_HWNDPREV)
+    return None
+
+
+def window_class(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(64)
+    user32.GetClassNameW(hwnd, buf, 64)
+    return buf.value
+
+
+def exclusive_fullscreen() -> bool:
+    """Sant när ett spel eller liknande kör i exklusiv helskärm. Då bestämmer Windows,
+    och widgeten ska inte försöka lägga sig ovanpå."""
+    state = ctypes.c_int()
+    return shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0 and \
+        state.value == QUNS_RUNNING_D3D_FULL_SCREEN
 
 
 def round_window_corners(win: tk.Misc) -> None:
@@ -820,6 +875,7 @@ class Widget:
         self.tip_job: str | None = None
         self.light = app._widget_light()
         self.colors = self.PALETTES[self.light]
+        self.last_cover: int | None = None      # så att samma fönster bara loggas en gång
 
         self.win = tk.Toplevel(app.root)
         self.win.withdraw()
@@ -868,6 +924,7 @@ class Widget:
         self._draw()
         if self.settings["visible"]:
             self.show()
+        self.win.after(TOPMOST_CHECK_MS, self._topmost_tick)
 
     # ---- position & storlek ----
     def _size(self, scale: float) -> tuple[int, int]:
@@ -881,7 +938,11 @@ class Widget:
             if is_on_a_monitor(x + w // 2, y + h // 2):
                 return x, y
             log(f"Sparad position ({x}, {y}) ligger inte på någon skärm – flyttar till huvudskärmen")
-        # Skrivs inte till filen, så widgeten hittar tillbaka om skärmen kopplas in igen
+        return self._default_position()
+
+    def _default_position(self) -> tuple[int, int]:
+        """Nere till höger på huvudskärmen, ovanför aktivitetsfältet. Skrivs inte till filen,
+        så widgeten hittar tillbaka om skärmen kopplas in igen."""
         scale = monitor_scale(0, 0)
         area = work_area(0, 0, MONITOR_DEFAULTTOPRIMARY)
         w, h = self._size(scale)
@@ -935,6 +996,7 @@ class Widget:
         log(f"Widgeten skalas om till {round(scale * 100)} %")
         self._layout()
         self._draw()
+        self.keep_on_top()      # skärmändring
 
     def _sync_scale(self) -> None:
         scale = self._scale_here()
@@ -972,6 +1034,7 @@ class Widget:
         log(f"Widgetens tema: {'ljust' if light else 'mörkt'}")
         self._apply_colors()
         self._draw()
+        self.keep_on_top()
 
     def _draw(self) -> None:
         px = round(self.GAUGE_PX * self.scale)   # ritas i exakt storlek så att de blir skarpa
@@ -994,11 +1057,42 @@ class Widget:
 
     # ---- visa/dölj ----
     def show(self) -> None:
+        w, h = self._size(self.scale)
+        if not is_on_a_monitor(self.x + w // 2, self.y + h // 2):
+            log(f"Widgeten låg utanför skärmarna ({self.x}, {self.y}) – flyttar till huvudskärmen")
+            self.x, self.y = self._default_position()
+            self._layout()
+            self._sync_scale()
         self.win.deiconify()
         self.win.update_idletasks()
         style_as_tool_window(self.win)
         round_window_corners(self.win)
         self._apply_border()
+        self.keep_on_top()
+
+    # ---- alltid överst ----
+    # Tk:s -topmost räcker oftast, men Windows kan ändå lägga ett annat fönster ovanför.
+    # Därför sätts HWND_TOPMOST direkt med SetWindowPos, och en timer kontrollerar läget.
+    def keep_on_top(self) -> None:
+        if self.win.state() == "normal":
+            set_topmost(int(self.win.wm_frame(), 16))
+
+    def _topmost_tick(self) -> None:
+        self.win.after(TOPMOST_CHECK_MS, self._topmost_tick)
+        try:
+            if self.win.state() != "normal" or exclusive_fullscreen():
+                return
+            hwnd = int(self.win.wm_frame(), 16)
+            cover = covering_window(hwnd)
+            if cover is None:
+                return
+            if cover != self.last_cover:
+                what = "tappade överst-flaggan" if cover == hwnd else f"hamnade bakom {window_class(cover)}"
+                log(f"Widgeten {what} – läggs överst igen")
+                self.last_cover = cover
+            set_topmost(hwnd)
+        except Exception as e:
+            log(f"FEL när widgeten skulle läggas överst: {e!r}")
 
     def set_visible(self, visible: bool) -> None:
         if visible:
@@ -1125,18 +1219,26 @@ class TrayIcon(pystray.Icon):
     """
 
     def __init__(self, *args, tray_uid: int, tray_guid: str, on_theme_change=None, on_menu_closed=None,
-                 **kwargs):
+                 on_display_change=None, **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
         self._tray_added = False
         self._on_theme_change = on_theme_change
         self._on_menu_closed = on_menu_closed
+        self._on_display_change_cb = on_display_change
         self._menu_open = False
         super().__init__(*args, **kwargs)
         # Ikonens dolda fönster tar emot Windows rundsändningar. När temat ändras skickar
         # Windows WM_SETTINGCHANGE med texten "ImmersiveColorSet". pystrays privata tabell.
         self._message_handlers[WM_SETTINGCHANGE] = self._on_setting_change
+
+    def _on_display_change(self, wparam, lparam):
+        # Ersätter pystrays privata metod med samma namn (WM_DISPLAYCHANGE): skärmar har
+        # kopplats in eller ur, eller fått ny upplösning
+        super()._on_display_change(wparam, lparam)
+        if self._on_display_change_cb:
+            self._on_display_change_cb()
 
     def _on_setting_change(self, wparam, lparam):
         if self._on_theme_change and lparam and ctypes.wstring_at(lparam) == "ImmersiveColorSet":
@@ -1203,6 +1305,7 @@ class App:
         self.auth_notified = False      # notis om utgången inloggning visad, tills en hämtning lyckas
         self.icons: dict[str, pystray.Icon] = {}
         self.ready = {k: threading.Event() for k in self.KEYS}
+        self.menu_waiting = False       # ett högerklick väntar på att sessionsikonen startar
         self.stop_evt = threading.Event()
         self.wake_evt = threading.Event()
 
@@ -1254,17 +1357,39 @@ class App:
             elif checked:
                 items.append(pystray.MenuItem(label, action, checked=lambda _, fn=checked[0]: fn()))
             else:
-                items.append(pystray.MenuItem(label, action, default=action == self._refresh_now))
+                # Standardvalet körs vid vänsterklick på ikonen och visas i fetstil
+                items.append(pystray.MenuItem(label, action, default=action == self._toggle_widget))
         return pystray.Menu(*items)
 
     def show_menu(self) -> None:
         """Visar tray-menyn vid pekaren, för widgetens högerklick. Det är en riktig Windows-meny
         som följer mörkt läge, vilket Tk:s meny inte gör. Meddelandet är samma som Windows
-        skickar vid högerklick på ikonen, så pystray bygger och visar menyn i ikonens egen tråd."""
+        skickar vid högerklick på ikonen, så pystray bygger och visar menyn i ikonens egen tråd.
+        Ett klick innan ikonen har startat köas och visas när den är klar."""
+        if self.ready["session"].is_set():
+            self._post_menu()
+        elif not self.menu_waiting:
+            self.menu_waiting = True
+            log("Högerklick innan menyn var klar – menyn visas när sessionsikonen har startat")
+            threading.Thread(target=self._show_menu_when_ready, daemon=True).start()
+
+    def _show_menu_when_ready(self):
+        ready = self.ready["session"].wait(MENU_WAIT_SECONDS)
+        self.menu_waiting = False
+        if ready and not self.stop_evt.is_set():
+            self._post_menu()
+        elif not ready:
+            log("FEL: menyn kunde inte visas, sessionsikonen startade inte")
+
+    def _post_menu(self):
         icon = self.icons.get("session")
         if icon is None or not icon._hwnd:
-            return      # ikonen har inte startat än
+            log("FEL: menyn kunde inte visas, sessionsikonen saknar fönster")
+            return
         pystray_win32.PostMessage(icon._hwnd, pystray_win32.WM_NOTIFY, 0, pystray_win32.WM_RBUTTONUP)
+
+    def _display_changed(self):
+        self.ui_queue.put(lambda: self.widget and self.widget.keep_on_top())
 
     def _menu_closed(self):
         # Pekaren kan ha lämnat widgeten medan menyn var öppen, utan att Tk märkte det
@@ -1406,6 +1531,7 @@ class App:
             # Båda ikonerna får meddelandet, men en räcker för att rita om allt
             on_theme_change=self._theme_changed if key == "session" else None,
             on_menu_closed=self._menu_closed,
+            on_display_change=self._display_changed if key == "session" else None,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
