@@ -16,8 +16,12 @@
 - Windows knyter en GUID till utgivaren för signerade program (python.exe/pythonw.exe), annars till
   sökvägen. Den osignerade exe-filen får därför GUID:er härledda från sin sökväg (`tray_guid`). Med
   `TRAY_IDS` direkt nekas exe-filen ikonerna
-- En GUID kan bara ägas av en process: en andra instans nekas ikonerna (`_tray_added` hindrar den från att
-  ändra eller ta bort den första instansens), men visar ändå en egen widget
+- Bara en kopia kör: `main` tar mutexen `Local\ClaudeUsageTray` (samma för exe och källkod). Finns den
+  redan rundsänder den nya kopian `ClaudeUsageTray.ShowWidget` (RegisterWindowMessageW), som
+  sessionsikonens dolda fönster i den körande kopian tar emot, och avslutar sig innan något fönster skapas.
+  `--login` undantas. Ändra inte namnen: äldre och nyare versioner måste känna igen varandra
+- En GUID kan bara ägas av en process: en andra instans (t.ex. en äldre version utan mutex) nekas ikonerna
+  (`_tray_added` hindrar den från att ändra eller ta bort den första instansens)
 - `TrayIcon._on_notify` bygger om menyn vid högerklick, eftersom pystray bygger den i förväg. Bygg aldrig
   om tray-menyn från en annan tråd (`update_menu`): det kan förstöra en meny som visas. Bocken för
   "Starta med Windows" läses alltid från registret (`autostart_enabled`), aldrig från settings.json

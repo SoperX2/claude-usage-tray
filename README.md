@@ -72,6 +72,7 @@ Do not turn off real-time protection or add exclusions to get around it. Reporti
 - **Refreshes automatically** every two minutes
 - **Floating widget** that stays on top, with the same two gauges (see below)
 - **Start with Windows** from the menu
+- **One copy at a time:** starting Claude Usage again while it is running just shows the widget of the copy that is already running
 - **English or Swedish:** the app uses Swedish if Windows is set to Swedish, and English otherwise
 
 ### Floating widget

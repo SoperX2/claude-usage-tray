@@ -1219,7 +1219,7 @@ class TrayIcon(pystray.Icon):
     """
 
     def __init__(self, *args, tray_uid: int, tray_guid: str, on_theme_change=None, on_menu_closed=None,
-                 on_display_change=None, **kwargs):
+                 on_display_change=None, on_show_request=None, **kwargs):
         guid_type = type(pystray_win32.NOTIFYICONDATAW().guidItem)
         self._tray_uid = tray_uid
         self._tray_guid = guid_type.from_buffer_copy(uuid.UUID(tray_guid).bytes_le)
@@ -1232,6 +1232,9 @@ class TrayIcon(pystray.Icon):
         # Ikonens dolda fönster tar emot Windows rundsändningar. När temat ändras skickar
         # Windows WM_SETTINGCHANGE med texten "ImmersiveColorSet". pystrays privata tabell.
         self._message_handlers[WM_SETTINGCHANGE] = self._on_setting_change
+        # En ny kopia av appen rundsänder det här meddelandet innan den avslutas
+        if on_show_request:
+            self._message_handlers[show_widget_message()] = lambda _w, _l: on_show_request() or 0
 
     def _on_display_change(self, wparam, lparam):
         # Ersätter pystrays privata metod med samma namn (WM_DISPLAYCHANGE): skärmar har
@@ -1388,6 +1391,11 @@ class App:
             return
         pystray_win32.PostMessage(icon._hwnd, pystray_win32.WM_NOTIFY, 0, pystray_win32.WM_RBUTTONUP)
 
+    def _show_requested(self):
+        """En ny kopia startades och avslutade sig själv. Körs i ikonens tråd."""
+        log("En ny kopia av appen startades – visar widgeten här i stället")
+        self.ui_queue.put(lambda: self.widget and self.widget.set_visible(True))
+
     def _display_changed(self):
         self.ui_queue.put(lambda: self.widget and self.widget.keep_on_top())
 
@@ -1532,6 +1540,7 @@ class App:
             on_theme_change=self._theme_changed if key == "session" else None,
             on_menu_closed=self._menu_closed,
             on_display_change=self._display_changed if key == "session" else None,
+            on_show_request=self._show_requested if key == "session" else None,
         )
         self.icons[key] = icon
         icon.run(setup=setup)
@@ -1675,10 +1684,73 @@ class App:
         log("Avslutat")
 
 
+# --------------------------------------------------------------------------- #
+#  Bara en kopia åt gången
+# --------------------------------------------------------------------------- #
+# Mutexen gäller per användare (Local\), och samma namn används av exe-filen och källkoden.
+# Windows släpper den när processen avslutas, även vid en krasch.
+SINGLE_INSTANCE_MUTEX = "Local\\ClaudeUsageTray"
+SHOW_WIDGET_MESSAGE = "ClaudeUsageTray.ShowWidget"
+ERROR_ALREADY_EXISTS = 183
+HWND_BROADCAST = 0xFFFF
+
+_kernel32_err = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32_err.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+_kernel32_err.CreateMutexW.restype = wintypes.HANDLE
+_kernel32_err.CloseHandle.argtypes = (wintypes.HANDLE,)
+_kernel32_err.CloseHandle.restype = wintypes.BOOL
+user32.RegisterWindowMessageW.argtypes = (wintypes.LPCWSTR,)
+user32.RegisterWindowMessageW.restype = wintypes.UINT
+user32.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+user32.PostMessageW.restype = wintypes.BOOL
+
+
+def show_widget_message() -> int:
+    """Samma nummer i alla processer under samma inloggning."""
+    return user32.RegisterWindowMessageW(SHOW_WIDGET_MESSAGE)
+
+
+def claim_single_instance(name: str = SINGLE_INSTANCE_MUTEX) -> int | None:
+    """Mutexens handtag om ingen annan kopia kör, annars None. Kan mutexen inte skapas
+    alls startar appen ändå, och handtaget blir 0."""
+    ctypes.set_last_error(0)
+    handle = _kernel32_err.CreateMutexW(None, False, name)
+    error = ctypes.get_last_error()
+    if handle and error == ERROR_ALREADY_EXISTS:
+        _kernel32_err.CloseHandle(handle)
+        return None
+    if not handle:
+        log(f"FEL: kunde inte skapa mutexen för en kopia åt gången (fel {error}), startar ändå")
+        return 0
+    return handle
+
+
+def release_single_instance(handle: int | None) -> None:
+    if handle:
+        _kernel32_err.CloseHandle(handle)
+
+
+def ask_running_copy_to_show() -> None:
+    # Rundsänds till alla toppfönster. Bara sessionsikonens dolda fönster i den körande kopian
+    # känner igen meddelandet. PostMessage väntar inte, så ett hängt program stoppar inget.
+    user32.PostMessageW(HWND_BROADCAST, show_widget_message(), 0, 0)
+
+
 def main():
-    set_dpi_awareness()
-    enable_dark_menus()     # före alla menyer
-    App().run()
+    lock = None
+    # Inloggningsprocessen (--login, kommer senare) ska kunna köra bredvid appen
+    if "--login" not in sys.argv:
+        lock = claim_single_instance()
+        if lock is None:
+            log("Claude Usage körs redan – ber den visa widgeten och avslutar den här kopian")
+            ask_running_copy_to_show()
+            return
+    try:
+        set_dpi_awareness()
+        enable_dark_menus()     # före alla menyer
+        App().run()
+    finally:
+        release_single_instance(lock)
 
 
 if __name__ == "__main__":
